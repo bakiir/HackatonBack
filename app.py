@@ -72,5 +72,113 @@ def export_section_info(section_id):
     return send_file(output_file, as_attachment=True)  # Отправляем файл пользователю
 
 
+@app.route('/subjects', methods=['GET'])
+def get_subjects():
+    """Получение списка всех уникальных предметов"""
+    try:
+        subjects = scheduler.get_unique_subjects()
+        return jsonify({
+            'success': True,
+            'subjects': subjects
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/subjects/<subject>/groups', methods=['GET'])
+def get_subject_groups(subject):
+    """Получение всех групп для конкретного предмета"""
+    try:
+        # Получаем группы по предмету
+        subject_groups = scheduler.exam_groups[scheduler.exam_groups['Subject'] == subject]
+
+        if subject_groups.empty:
+            return jsonify({
+                'success': False,
+                'error': f'Группы для предмета {subject} не найдены'
+            }), 404
+
+        # Группируем данные по образовательным программам
+        grouped_data = {}
+        for edu_program in subject_groups['EduProgram'].unique():
+            program_groups = subject_groups[subject_groups['EduProgram'] == edu_program]
+            grouped_data[edu_program] = program_groups.to_dict('records')
+
+        return jsonify({
+            'success': True,
+            'subject': subject,
+            'groups': grouped_data
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/subjects/<subject>/delete', methods=['DELETE'])
+def delete_subject(subject):
+    """Удаление всех групп конкретного предмета"""
+    try:
+        # Находим все группы с указанным предметом
+        subject_groups = scheduler.exam_groups[scheduler.exam_groups['Subject'] == subject]
+
+        if subject_groups.empty:
+            return jsonify({
+                'success': False,
+                'error': f'Предмет {subject} не найден'
+            }), 404
+
+        # Удаляем все секции этого предмета
+        sections_to_delete = subject_groups['Section'].tolist()
+        scheduler._delete_sections(sections_to_delete)
+
+        # Пересоздаем расписание
+        scheduler.create_schedule()
+
+        return jsonify({
+            'success': True,
+            'message': f'Все группы предмета {subject} успешно удалены',
+            'deleted_sections': sections_to_delete
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/subjects/<subject>/sections/<section>', methods=['DELETE'])
+def delete_section(subject, section):
+    """Удаление конкретной секции предмета"""
+    try:
+        # Проверяем существование секции и соответствие предмету
+        subject_groups = scheduler.exam_groups[scheduler.exam_groups['Subject'] == subject]
+        if section not in subject_groups['Section'].values:
+            return jsonify({
+                'success': False,
+                'error': f'Секция {section} не найдена для предмета {subject}'
+            }), 404
+
+        # Удаляем конкретную секцию
+        scheduler._delete_sections([section])
+
+        # Пересоздаем расписание
+        scheduler.create_schedule()
+
+        return jsonify({
+            'success': True,
+            'message': f'Секция {section} успешно удалена',
+            'deleted_section': section
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

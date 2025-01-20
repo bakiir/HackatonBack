@@ -286,17 +286,138 @@ class ExamScheduler:
 
         logging.info(f"Информация о секции успешно сохранена в файл {output_file}.")
 
+    def get_unique_subjects(self):
+        """
+        Получение списка всех уникальных предметов.
 
-    def print_all_slots(self):
-        """Вывод всех доступных слотов с указанием дня, времени и комнаты."""
-        print("Доступные слоты:")
-        for day in range(self.num_days):
-            for room in self.rooms:
-                for time_slot in range(len(self.time_slots)):
-                    slot_id = f"slot_day_{day}_room_{room}_time_{time_slot}"
-                    day_date = (self.start_date + timedelta(days=day)).strftime('%Y-%m-%d')
-                    time_range = self.time_slots[time_slot]
-                    print(f"Слот ID: {slot_id}, День: {day_date}, Время: {time_range}, Комната: {room}")
+        Returns:
+            list: Список уникальных предметов
+        """
+        unique_subjects = sorted(self.exam_groups['Subject'].unique())
+        return unique_subjects
+
+    def show_subjects_and_delete(self):
+        """
+        Показывает список всех предметов и позволяет выбрать предмет для удаления.
+        """
+        logging.info("Получение списка уникальных предметов")
+
+        # Получаем и показываем все уникальные предметы
+        subjects = self.get_unique_subjects()
+        print("\nСписок всех предметов:")
+        for idx, subject in enumerate(subjects, 1):
+            print(f"{idx}. {subject}")
+
+        while True:
+            try:
+                choice = input("\nВыберите номер предмета для просмотра групп (0 - для выхода): ")
+                if choice == '0':
+                    return False
+
+                subject_idx = int(choice) - 1
+                if 0 <= subject_idx < len(subjects):
+                    selected_subject = subjects[subject_idx]
+                    self.delete_subject_groups(selected_subject)
+                    return True
+                else:
+                    print("Неверный номер предмета")
+            except ValueError:
+                print("Пожалуйста, введите число")
+
+    def delete_subject_groups(self, subject):
+        """
+        Показывает группы выбранного предмета и позволяет удалить их.
+
+        Args:
+            subject (str): Название выбранного предмета
+        """
+        logging.info(f"Поиск групп для предмета: {subject}")
+
+        # Находим все группы с указанным предметом
+        subject_groups = self.exam_groups[self.exam_groups['Subject'] == subject]
+
+        if subject_groups.empty:
+            logging.warning(f"Группы для предмета {subject} не найдены")
+            return False
+
+        # Выводим информацию о группах
+        print(f"\nГруппы по предмету {subject}:")
+        print("=" * 50)
+
+        # Группируем по образовательной программе для лучшей читаемости
+        for edu_program in subject_groups['EduProgram'].unique():
+            print(f"\nПрограмма: {edu_program}")
+            print("-" * 30)
+
+            program_groups = subject_groups[subject_groups['EduProgram'] == edu_program]
+            for idx, group in program_groups.iterrows():
+                print(f"Секция: {group['Section']}")
+                print(f"Курс: {group['Course']}")
+                print(f"Преподаватель: {group['Instructor']}")
+                print(f"Количество студентов: {group['fake_id']}")
+                print("-" * 20)
+
+        while True:
+            choice = input("\nВыберите действие:\n"
+                           "1 - Удалить все группы этого предмета\n"
+                           "2 - Удалить конкретную группу\n"
+                           "3 - Вернуться к списку предметов\n"
+                           "Ваш выбор: ")
+
+            if choice == "1":
+                sections_to_delete = subject_groups['Section'].tolist()
+                self._delete_sections(sections_to_delete)
+                logging.info(f"Удалены все группы предмета {subject}")
+                return True
+
+            elif choice == "2":
+                print("\nСписок секций:")
+                sections = subject_groups['Section'].tolist()
+                for idx, section in enumerate(sections, 1):
+                    print(f"{idx}. {section}")
+
+                while True:
+                    try:
+                        section_idx = int(input("\nВведите номер секции для удаления (0 - отмена): ")) - 1
+                        if section_idx == -1:
+                            return False
+                        if 0 <= section_idx < len(sections):
+                            section_to_delete = sections[section_idx]
+                            self._delete_sections([section_to_delete])
+                            logging.info(f"Удалена секция {section_to_delete}")
+                            return True
+                        else:
+                            print("Неверный номер секции")
+                    except ValueError:
+                        print("Пожалуйста, введите число")
+
+            elif choice == "3":
+                return False
+
+            else:
+                print("Неверный выбор. Пожалуйста, выберите 1, 2 или 3")
+
+    def _delete_sections(self, sections):
+        """
+        Вспомогательный метод для удаления секций из расписания.
+
+        Args:
+            sections (list): Список секций для удаления
+        """
+        # Удаляем из основного DataFrame с экзаменами
+        self.exams_df = self.exams_df[~self.exams_df['Section'].isin(sections)]
+
+        # Удаляем из сгруппированных экзаменов
+        self.exam_groups = self.exam_groups[~self.exam_groups['Section'].isin(sections)]
+
+        # Если расписание уже создано, удаляем и из него
+        if self.schedule_df is not None:
+            self.schedule_df = self.schedule_df[~self.schedule_df['Section'].isin(sections)]
+
+        # Пересчитываем данные
+        self._prepare_data()
+
+
 
 
 if __name__ == "__main__":
@@ -307,10 +428,15 @@ if __name__ == "__main__":
         num_days=14
     )
 
-    scheduler.print_all_slots()
 
     # Создание общего расписания
     scheduler.create_schedule()
+
+    scheduler.show_subjects_and_delete()
+
+    # После удаления можно пересоздать или обновить расписание
+    scheduler.create_schedule()
+    scheduler.export_schedule("updated_schedule.xlsx")
 
     # Экспорт общего расписания в Excel
     output_schedule_file = "general_schedule.xlsx"
