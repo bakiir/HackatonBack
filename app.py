@@ -22,6 +22,29 @@ def get_schedule():
     """Получение общего расписания"""
     return jsonify(scheduler.schedule_df.to_dict('records'))
 
+
+@app.route('/schedule/stats')
+def get_schedule_stats():
+    """Получение статистики по расписанию"""
+    try:
+        total_exams = len(scheduler.exam_groups)  # Общее количество экзаменов
+        successful_exams = len(scheduler.schedule_df)  # Успешно запланированные экзамены
+        failed_exams = total_exams - successful_exams  # Неудачные попытки
+
+        return jsonify({
+            'success': True,
+            'total_exams': total_exams,
+            'successful_exams': successful_exams,
+            'failed_exams': failed_exams
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+
 @app.route('/schedule/student/<student_id>')
 def get_student_schedule(student_id):
     """Получение расписания конкретного студента"""
@@ -71,7 +94,6 @@ def export_section_info(section_id):
     scheduler.export_section_info_to_excel(section_info, output_file)  # Экспортируем в Excel
     return send_file(output_file, as_attachment=True)  # Отправляем файл пользователю
 
-
 @app.route('/subjects', methods=['GET'])
 def get_subjects():
     """Получение списка всех уникальных предметов"""
@@ -86,7 +108,6 @@ def get_subjects():
             'success': False,
             'error': str(e)
         }), 500
-
 
 @app.route('/subjects/<subject>/groups', methods=['GET'])
 def get_subject_groups(subject):
@@ -117,7 +138,6 @@ def get_subject_groups(subject):
             'success': False,
             'error': str(e)
         }), 500
-
 
 @app.route('/subjects/<subject>/delete', methods=['DELETE'])
 def delete_subject(subject):
@@ -150,7 +170,6 @@ def delete_subject(subject):
             'error': str(e)
         }), 500
 
-
 @app.route('/subjects/<subject>/sections/<section>', methods=['DELETE'])
 def delete_section(subject, section):
     """Удаление конкретной секции предмета"""
@@ -173,6 +192,41 @@ def delete_section(subject, section):
             'success': True,
             'message': f'Секция {section} успешно удалена',
             'deleted_section': section
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/available-rooms/<day>/<time_slot>', methods=['GET'])
+def get_available_rooms(day, time_slot):
+    """
+    Получение списка свободных аудиторий на указанный день и временной слот.
+
+    Args:
+        day (str): Дата в формате 'YYYY-MM-DD'.
+        time_slot (str): Временной слот (например, '08:00-11:00').
+
+    Returns:
+        JSON: Список свободных аудиторий или сообщение об ошибке.
+    """
+    try:
+        # Проверяем, существует ли расписание
+        if not hasattr(scheduler, 'room_availability'):
+            return jsonify({
+                'success': False,
+                'error': 'Расписание не создано. Сначала создайте расписание.'
+            }), 400
+
+        # Получаем список свободных аудиторий
+        available_rooms = scheduler.find_available_rooms(day, time_slot)
+
+        return jsonify({
+            'success': True,
+            'day': day,
+            'time_slot': time_slot,
+            'available_rooms': available_rooms
         })
     except Exception as e:
         return jsonify({
