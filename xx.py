@@ -1,5 +1,6 @@
 import pandas as pd
 import networkx as nx
+import random
 from datetime import datetime, timedelta
 import logging
 
@@ -16,7 +17,7 @@ class ExamScheduler:
         self.num_days = num_days
         self.schedule_df = None  # Атрибут для хранения расписания
 
-        self.time_slots = ["09:00-13:00", "14:00-18:00"]
+        self.time_slots = ["08:00-11:00", "11:30-14:30", "15:00-18:00"]
         self.days = [self.start_date + timedelta(days=i) for i in range(self.num_days)]
 
         # Подготовка данных
@@ -58,104 +59,194 @@ class ExamScheduler:
         return student_schedule
 
     def create_schedule(self):
-        logging.info("Создание графа для планирования.")
-        G = nx.Graph()
-
-        # Узлы для экзаменов
-        logging.info("Добавление узлов для экзаменов в граф.")
-        for i, exam in self.exam_groups.iterrows():
-            G.add_node(f"exam_{i}", type="exam", data=exam)
-
-        # Узлы для слотов (комбинация день/время/аудитория)
-        slots = []
-        logging.info("Добавление узлов для временных слотов в граф.")
-        for day in range(self.num_days):
-            for room in self.rooms:
-                for time_slot in range(len(self.time_slots)):
-                    slot_id = f"slot_day_{day}_room_{room}_time_{time_slot}"
-                    G.add_node(slot_id, type="slot", day=day, room=room, time_slot=time_slot)
-                    slots.append(slot_id)
-
-        # Ребра между экзаменами и слотами
-        logging.info("Создание ребер между экзаменами и временными слотами.")
-        for i, exam in self.exam_groups.iterrows():
-            if i % 100 == 0:
-                logging.info(f"Обработка экзамена {i + 1} из {len(self.exam_groups)}")
-
-            # Фильтрация слотов для экзамена
-            relevant_slots = [slot for slot in slots if
-                              exam['fake_id'] <= self.room_capacities[G.nodes[slot]['room']]]
-
-            for slot_id in relevant_slots:
-                G.add_edge(f"exam_{i}", slot_id)
-
-        # Решение задачи с помощью паросочетания
-        logging.info("Запуск алгоритма паросочетания.")
-        matching = nx.algorithms.matching.max_weight_matching(G, maxcardinality=True)
-
-        # Формирование расписания из результата
-        logging.info("Формирование расписания из результата паросочетания.")
+        logging.info("Создание расписания")
         schedule = []
-        completed_count = 0
-        total_exams = len(self.exam_groups)
+        student_exams_per_day = {}
+        failed_sections = []  # Список для хранения информации о неудачных попытках
 
-        # Словарь для отслеживания количества экзаменов на каждый день
-        day_counts = {day: 0 for day in range(self.num_days)}
+        # Словарь для отслеживания занятости аудиторий по дням и временным слотам
+        self.room_availability = {  # Сохраняем как атрибут класса
+            day: {slot: set() for slot in self.time_slots}  # Множество занятых аудиторий
+            for day in self.days
+        }
 
-        # Словарь для отслеживания занятых слотов
-        used_slots = set()
+        # Сортируем секции по количеству студентов (от большего к меньшему)
+        sections = self.exam_groups.sort_values(by='fake_id', ascending=False)['Section'].unique()
 
-        # Сортировка экзаменов по количеству студентов (от большего к меньшему)
-        sorted_exams = sorted(self.exam_groups.iterrows(), key=lambda x: x[1]['fake_id'], reverse=True)
+        # Резервные дни
+        reserve_days = [self.start_date + timedelta(days=self.num_days + i) for i in range(5)]  # +5 резервных дней
 
-        for i, exam in sorted_exams:
-            # Найти слот с наименьшим количеством экзаменов в этот день
-            min_day = min(day_counts, key=day_counts.get)
-            relevant_slots = [slot for slot in slots if
-                              G.nodes[slot]['day'] == min_day and
-                              exam['fake_id'] <= self.room_capacities[G.nodes[slot]['room']] and
-                              slot not in used_slots]
+        # Множество для отслеживания уже запланированных секций
+        scheduled_sections = set()
 
-            if not relevant_slots:
-                logging.warning(f"Не удалось найти подходящий слот для экзамена {i}.")
-                continue
+        for section in sections:
+            if section in scheduled_sections:
+                continue  # Пропускаем секцию, если она уже запланирована
 
-            # Выбираем первый подходящий слот
-            slot_id = relevant_slots[0]
-            slot_data = G.nodes[slot_id]
+            section_data = self.exam_groups[self.exam_groups['Section'] == section].iloc[0]
+            section_students = self.exams_df[self.exams_df['Section'] == section]['fake_id'].unique()
+            num_students = len(section_students)
 
-            # Исправление назначения даты экзамена
-            exam_date = (self.start_date + timedelta(days=slot_data['day'])).strftime('%Y-%m-%d')
+            scheduled = False
+            busy_days = {}  # Словарь для хранения дней, когда студенты заняты
 
-            schedule.append({
-                'Date': exam_date,
-                'Subject': exam['Subject'],
-                'Instructor': exam['Instructor'],
-                'Course': exam['Course'],
-                'EduProgram': exam['EduProgram'],
-                'YearsOfStudy': exam['YearsOfStudy'],
-                'Section': exam['Section'],
-                'Students_Count': exam['fake_id'],
-                'Room': slot_data['room'],
-                'Time_Slot': self.time_slots[slot_data['time_slot']]
-            })
+            for day in self.days + reserve_days:  # Проверяем и резервные дни
+                exam_date = day.strftime('%Y-%m-%d')
 
-            # Увеличиваем счетчик экзаменов для этого дня
-            day_counts[slot_data['day']] += 1
+                # Проверка занятости студентов
+                busy_students = [
+                    student for student in section_students
+                    if student_exams_per_day.get(student, {}).get(exam_date, 0) == 1
+                ]
+                if busy_students:
+                    busy_days[exam_date] = busy_students  # Сохраняем информацию о занятости
+                    continue  # Пропускаем этот день, если студенты заняты
 
-            # Помечаем слот как занятый
-            used_slots.add(slot_id)
+                # Попробуем все временные слоты
+                for time_slot in self.time_slots:
+                    # Ищем свободную аудиторию
+                    suitable_rooms = [
+                        room for room in self.rooms
+                        if num_students <= self.room_capacities[room] and
+                           room not in self.room_availability.get(day, {}).get(time_slot, set())
+                    ]
 
-            completed_count += 1
-            logging.info(f"Назначено экзаменов: {completed_count}/{total_exams}")
+                    if not suitable_rooms:
+                        # Если не удалось запланировать, сохраняем информацию о неудачной попытке
+                        failed_sections.append({
+                            'section': section,
+                            'reason': f"Нет подходящей аудитории в день {exam_date} и слот {time_slot}",
+                            'busy_students': None,
+                            'desired_time': f"{exam_date} {time_slot}"  # Желаемое время
+                        })
+                        continue  # Пропускаем этот слот, если нет подходящей аудитории
 
-        # Логирование распределения экзаменов по дням
-        logging.info("Распределение экзаменов по дням:")
-        for day, count in day_counts.items():
-            logging.info(f"День {day + 1}: {count} экзаменов")
+                    # Выбираем первую подходящую аудиторию
+                    room = suitable_rooms[0]
 
-        logging.info("Расписание успешно создано.")
-        self.schedule_df = pd.DataFrame(schedule)  # Сохраняем расписание в атрибут класса
+                    # Планируем экзамен
+                    schedule.append({
+                        'Date': exam_date,
+                        'Subject': section_data['Subject'],
+                        'Instructor': section_data['Instructor'],
+                        'Course': section_data['Course'],
+                        'EduProgram': section_data['EduProgram'],
+                        'YearsOfStudy': section_data['YearsOfStudy'],
+                        'Section': section,
+                        'Students_Count': num_students,
+                        'Room': room,
+                        'Time_Slot': time_slot
+                    })
+
+                    # Пометка студентов
+                    for student in section_students:
+                        student_exams_per_day.setdefault(student, {})[exam_date] = 1
+
+                    # Помечаем аудиторию как занятую
+                    if day not in self.room_availability:
+                        self.room_availability[day] = {slot: set() for slot in self.time_slots}
+                    self.room_availability[day][time_slot].add(room)
+
+                    scheduled = True
+                    scheduled_sections.add(section)  # Добавляем секцию в множество запланированных
+                    break  # Выходим из цикла временных слотов
+
+                if scheduled:
+                    break  # Выходим из цикла дней
+
+            if not scheduled:
+                # Если студенты заняты в несколько дней, группируем информацию
+                if busy_days:
+                    busy_days_info = ", ".join(
+                        f"{day} (занятые студенты: {len(busy_students)})"
+                        for day, busy_students in busy_days.items()
+                    )
+                    reason = f"Студенты заняты в следующие дни: {busy_days_info}"
+                else:
+                    reason = "Нет подходящей аудитории или все студенты заняты в доступные дни"
+
+                failed_sections.append({
+                    'section': section,
+                    'reason': reason,
+                    'busy_students': None,
+                    'desired_time': None  # Не удалось найти подходящее время
+                })
+
+        # Попытка перенести неудачные экзамены на свободные слоты
+        for failed in failed_sections[:]:  # Используем копию списка для безопасного удаления
+            if "Нет подходящей аудитории" in failed['reason']:
+                # Извлекаем день и слот из причины
+                day = failed['reason'].split("в день ")[1].split(" и слот ")[0]
+                original_slot = failed['reason'].split(" и слот ")[1].split(",")[0]
+
+                # Ищем свободные слоты в этот день
+                for time_slot in self.time_slots:
+                    if time_slot == original_slot:
+                        continue  # Пропускаем исходный слот
+
+                    # Ищем свободную аудиторию
+                    suitable_rooms = [
+                        room for room in self.rooms
+                        if num_students <= self.room_capacities[room] and
+                           room not in self.room_availability.get(day, {}).get(time_slot, set())
+                    ]
+
+                    if suitable_rooms:
+                        # Нашли свободный слот, планируем экзамен
+                        room = suitable_rooms[0]
+
+                        # Удаляем старую запись из расписания (если она есть)
+                        schedule = [exam for exam in schedule if exam['Section'] != failed['section']]
+
+                        # Добавляем новую запись
+                        schedule.append({
+                            'Date': day,
+                            'Subject': section_data['Subject'],
+                            'Instructor': section_data['Instructor'],
+                            'Course': section_data['Course'],
+                            'EduProgram': section_data['EduProgram'],
+                            'YearsOfStudy': section_data['YearsOfStudy'],
+                            'Section': failed['section'],
+                            'Students_Count': num_students,
+                            'Room': room,
+                            'Time_Slot': time_slot
+                        })
+
+                        # Пометка студентов
+                        for student in section_students:
+                            student_exams_per_day.setdefault(student, {})[day] = 1
+
+                        # Помечаем аудиторию как занятую
+                        if day not in self.room_availability:
+                            self.room_availability[day] = {slot: set() for slot in self.time_slots}
+                        self.room_availability[day][time_slot].add(room)
+
+                        # Удаляем из списка неудачных попыток
+                        failed_sections.remove(failed)
+                        logging.info(
+                            f"Секция {failed['section']} перенесена на {day} в слот {time_slot} в аудитории {room}."
+                        )
+                        break
+
+        # Выводим итоговую статистику
+        total_sections = len(sections)
+        successful_sections = len(scheduled_sections)
+        logging.info(f"Успешно запланировано экзаменов: {successful_sections} из {total_sections}")
+
+        # Выводим информацию о неудачных попытках
+        if failed_sections:
+            logging.warning(f"Не удалось запланировать {len(failed_sections)} экзаменов:")
+            for failed in failed_sections:
+                log_message = (
+                    f"Секция: {failed['section']}, "
+                    f"Причина: {failed['reason']}"
+                )
+                if failed['desired_time']:
+                    log_message += f", Желаемое время: {failed['desired_time']}"
+                logging.warning(log_message)
+
+        logging.info("Расписание успешно создано")
+        self.schedule_df = pd.DataFrame(schedule)
 
     def export_schedule(self, output_excel):
         logging.info("Экспорт общего расписания в Excel.")
@@ -166,6 +257,40 @@ class ExamScheduler:
         logging.info("Экспорт общего расписания в файл HTML.")
         self.schedule_df.to_html(output_html, index=False)
         logging.info(f"Расписание сохранено в файл {output_html}.")
+
+    def find_available_rooms(self, day, time_slot):
+        """
+        Поиск свободных аудиторий в указанный день и временной слот.
+
+        Args:
+            day (str): Дата в формате 'YYYY-MM-DD'.
+            time_slot (str): Временной слот (например, '08:00-11:00').
+
+        Returns:
+            list: Список свободных аудиторий.
+        """
+        logging.info(f"Поиск свободных аудиторий на {day} в слот {time_slot}.")
+
+        # Преобразуем день в datetime объект
+        try:
+            day = datetime.strptime(day, '%Y-%m-%d')
+        except ValueError:
+            logging.error(f"Некорректный формат даты: {day}. Ожидается 'YYYY-MM-DD'.")
+            return []
+
+        # Проверяем, есть ли информация о занятости для этого дня и слота
+        if day not in self.room_availability or time_slot not in self.room_availability[day]:
+            logging.warning(f"Нет данных о занятости для {day} и слота {time_slot}.")
+            return self.rooms  # Если данных нет, считаем все аудитории свободными
+
+        # Находим занятые аудитории в этот день и слот
+        busy_rooms = self.room_availability[day][time_slot]
+
+        # Находим свободные аудитории
+        available_rooms = [room for room in self.rooms if room not in busy_rooms]
+
+        logging.info(f"Найдено {len(available_rooms)} свободных аудиторий.")
+        return available_rooms
 
     def print_student_schedule(self, student_id):
         student_schedule = self.get_student_sections(student_id)
@@ -432,28 +557,37 @@ if __name__ == "__main__":
     # Создание общего расписания
     scheduler.create_schedule()
 
-    scheduler.show_subjects_and_delete()
+    # Поиск свободных аудиторий
+    day = "2024-01-16"  # Пример даты
+    time_slot = "08:00-11:00"  # Пример временного слота
+    available_rooms = scheduler.find_available_rooms(day, time_slot)
 
-    # После удаления можно пересоздать или обновить расписание
-    scheduler.create_schedule()
-    scheduler.export_schedule("updated_schedule.xlsx")
+    print(f"Свободные аудитории на {day} в слот {time_slot}:")
+    for room in available_rooms:
+        print(room)
 
-    # Экспорт общего расписания в Excel
-    output_schedule_file = "general_schedule.xlsx"
-    scheduler.export_schedule(output_schedule_file)
-
-    # Вывод расписания для конкретного студента в консоль
-    student_id = "Student0001"
-    scheduler.print_student_schedule(student_id)
-
-    # Получение информации о секции
-    section_id = "KRL 1104-34-Ch"
-    section_info = scheduler.get_section_info(section_id)
-
-    # Экспорт информации о секции в Excel
-    output_section_file = "section_info.xlsx"
-    scheduler.export_section_info_to_excel(section_info, output_section_file)
-
-    # Экспорт расписания для конкретного студента в Excel
-    output_student_file = "student_schedule.xlsx"
-    scheduler.export_student_schedule_to_excel(student_id, output_student_file)
+    # scheduler.show_subjects_and_delete()
+    #
+    # # После удаления можно пересоздать или обновить расписание
+    # scheduler.create_schedule()
+    # scheduler.export_schedule("updated_schedule.xlsx")
+    #
+    # # Экспорт общего расписания в Excel
+    # output_schedule_file = "general_schedule.xlsx"
+    # scheduler.export_schedule(output_schedule_file)
+    #
+    # # Вывод расписания для конкретного студента в консоль
+    # student_id = "Student0001"
+    # scheduler.print_student_schedule(student_id)
+    #
+    # # Получение информации о секции
+    # section_id = "KRL 1104-34-Ch"
+    # section_info = scheduler.get_section_info(section_id)
+    #
+    # # Экспорт информации о секции в Excel
+    # output_section_file = "section_info.xlsx"
+    # scheduler.export_section_info_to_excel(section_info, output_section_file)
+    #
+    # # Экспорт расписания для конкретного студента в Excel
+    # output_student_file = "student_schedule.xlsx"
+    # scheduler.export_student_schedule_to_excel(student_id, output_student_file)
