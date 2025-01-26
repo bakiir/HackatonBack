@@ -3,6 +3,9 @@ import networkx as nx
 import random
 from datetime import datetime, timedelta
 import logging
+import random
+
+# Рандомизация порядка слотов
 
 # Настройка логгера
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -17,7 +20,7 @@ class ExamScheduler:
         self.num_days = num_days
         self.schedule_df = None  # Атрибут для хранения расписания
 
-        self.time_slots = ["08:00-11:00", "11:30-14:30", "15:00-18:00"]
+        self.time_slots = ["08:00-11:00", "11:30-14:30"]
         self.days = [self.start_date + timedelta(days=i) for i in range(self.num_days)]
 
         # Подготовка данных
@@ -61,7 +64,7 @@ class ExamScheduler:
     def create_schedule(self):
         logging.info("Создание расписания")
         schedule = []
-        student_exams_per_day = {}
+        student_exams_per_day = {}  # Словарь для отслеживания занятости студентов
         failed_sections = []  # Список для хранения информации о неудачных попытках
 
         # Словарь для отслеживания занятости аудиторий по дням и временным слотам
@@ -102,8 +105,12 @@ class ExamScheduler:
                     busy_days[exam_date] = busy_students  # Сохраняем информацию о занятости
                     continue  # Пропускаем этот день, если студенты заняты
 
+                # Рандомизация порядка слотов
+                time_slots = self.time_slots.copy()
+                random.shuffle(time_slots)
+
                 # Попробуем все временные слоты
-                for time_slot in self.time_slots:
+                for time_slot in time_slots:
                     # Ищем свободную аудиторию
                     suitable_rooms = [
                         room for room in self.rooms
@@ -247,6 +254,7 @@ class ExamScheduler:
 
         logging.info("Расписание успешно создано")
         self.schedule_df = pd.DataFrame(schedule)
+
 
     def export_schedule(self, output_excel):
         logging.info("Экспорт общего расписания в Excel.")
