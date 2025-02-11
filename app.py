@@ -15,7 +15,7 @@ scheduler = ExamScheduler(
 )
 
 # Создание расписания при запуске
-scheduler.create_schedule()
+scheduler.run_scheduling_process()
 
 @app.route('/schedule')
 def get_schedule():
@@ -29,7 +29,7 @@ def get_schedule_stats():
     try:
         total_exams = len(scheduler.exam_groups)  # Общее количество экзаменов
         successful_exams = len(scheduler.schedule_df)  # Успешно запланированные экзамены
-        failed_exams = total_exams - successful_exams  # Неудачные попытки
+        failed_exams = total_exams - successful_exa1ms  # Неудачные попытки
 
         return jsonify({
             'success': True,

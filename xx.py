@@ -47,6 +47,42 @@ class ExamScheduler:
         logging.info(f"Всего экзаменов: {len(self.exam_groups)}")
         logging.info(f"Всего временных слотов: {total_slots}")
 
+    def manage_subjects_before_scheduling(self):
+        """
+        Управление предметами перед созданием расписания.
+        Позволяет просматривать и удалять предметы/секции до генерации расписания.
+        """
+        while True:
+            print("\n=== Управление предметами перед составлением расписания ===")
+            print("1. Показать все предметы и их секции")
+            print("2. Продолжить с генерацией расписания")
+            choice = input("Выберите действие (1-2): ")
+
+            if choice == "1":
+                changed = self.show_subjects_and_delete()
+                if changed:
+                    print("\nСписок предметов был изменен.")
+                    self._prepare_data()  # Обновляем данные после изменений
+            elif choice == "2":
+                break
+            else:
+                print("Неверный выбор. Пожалуйста, выберите 1 или 2")
+
+    def run_scheduling_process(self):
+        """
+        Основной процесс планирования экзаменов с предварительным управлением предметами.
+        """
+        print("\nНачало процесса планирования экзаменов")
+        print("Сначала вы можете просмотреть и удалить ненужные предметы/секции.")
+
+        # Управление предметами перед планированием
+        self.manage_subjects_before_scheduling()
+
+        # Создание расписания
+        print("\nНачинаем генерацию расписания...")
+        self.create_schedule()
+        print("Расписание успешно создано!")
+
     def get_student_sections(self, student_id):
         logging.info(f"Поиск секций для студента {student_id}.")
         student_sections = self.exams_df[self.exams_df['fake_id'] == student_id][
@@ -507,7 +543,7 @@ if __name__ == "__main__":
 
 
     # Создание общего расписания
-    scheduler.create_schedule()
+    scheduler.run_scheduling_process()
 
     # Поиск свободных аудиторий
     day = "2024-01-16"  # Пример даты
@@ -524,9 +560,9 @@ if __name__ == "__main__":
     # scheduler.create_schedule()
     # scheduler.export_schedule("updated_schedule.xlsx")
     #
-    # # Экспорт общего расписания в Excel
-    # output_schedule_file = "general_schedule.xlsx"
-    # scheduler.export_schedule(output_schedule_file)
+    # Экспорт общего расписания в Excel
+
+    scheduler.export_schedule("general_schedule.xlsx")
     #
     # # Вывод расписания для конкретного студента в консоль
     # student_id = "Student0001"
