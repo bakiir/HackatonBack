@@ -1,9 +1,7 @@
-import pandas as pd
-import networkx as nx
 import random
+import pandas as pd
 from datetime import datetime, timedelta
 import logging
-import random
 
 # Рандомизация порядка слотов
 
@@ -11,10 +9,11 @@ import random
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ExamScheduler:
-    def __init__(self, exams_file, rooms_file, start_date=None, num_days=14):
+    def __init__(self, exams_file, rooms_file,faculties_file, start_date=None, num_days=14):
         logging.info("Инициализация планировщика экзаменов.")
         self.exams_df = pd.read_excel(exams_file)
         self.rooms_df = pd.read_excel(rooms_file)
+        self.faculties_df = pd.read_excel(faculties_file)
 
         self.start_date = datetime.strptime(start_date, '%Y-%m-%d') if start_date else datetime.now()
         self.num_days = num_days
@@ -42,6 +41,12 @@ class ExamScheduler:
 
         # Создаем словарь всех студентов для быстрого доступа
         self.all_students_dict = self.exams_df[['fake_id', 'fake_name']].drop_duplicates().to_dict('records')
+
+        # Создаем словарь факультетов по предметам
+        self.subject_faculty_map = self.faculties_df.groupby('Subject')['Faculty'].apply(set).to_dict()
+
+        # Словарь, где ключ - факультет, значение - список возможных прокторов
+        self.faculty_proctors = self.faculties_df.groupby('Faculty')['Instructor'].apply(list).to_dict()
 
         total_slots = len(self.rooms) * len(self.time_slots) * self.num_days
         logging.info(f"Всего экзаменов: {len(self.exam_groups)}")
@@ -96,6 +101,36 @@ class ExamScheduler:
         # Используем общее расписание
         student_schedule = self.schedule_df[self.schedule_df['Section'].isin(student_sections['Section'])]
         return student_schedule
+
+    def assign_proctors(self):
+        logging.info("Назначение прокторов.")
+        assigned_proctors = []
+
+        for _, row in self.schedule_df.iterrows():
+            subject = row['Subject']
+            exam_faculty = list(self.subject_faculty_map.get(subject, []))
+
+            if not exam_faculty:
+                assigned_proctors.append(None)
+                continue
+
+            exam_faculty = exam_faculty[0]  # Берем первый факультет из списка (если их несколько)
+
+            if exam_faculty == 'ШЦТ':
+                # Для ШЦТ берем только прокторов из ШЦТ
+                possible_proctors = self.faculty_proctors.get('ШЦТ', [])
+            else:
+                # Для остальных факультетов исключаем их же и исключаем прокторов из ШЦТ
+                possible_proctors = [
+                    instr for fac, instrs in self.faculty_proctors.items()
+                    if fac not in (exam_faculty, 'ШЦТ') for instr in instrs
+                ]
+
+            # Назначаем случайного проктора
+            assigned_proctors.append(random.choice(possible_proctors) if possible_proctors else None)
+
+        self.schedule_df['Proctor'] = assigned_proctors
+        logging.info("Прокторы успешно назначены.")
 
     def create_schedule(self):
         logging.info("Создание расписания")
@@ -234,6 +269,9 @@ class ExamScheduler:
                 logging.warning(f"Секция: {failed['section']}, Причина: {failed['reason']}")
 
         self.schedule_df = pd.DataFrame(schedule)
+        self.assign_proctors()
+
+
 
 
     def export_schedule(self, output_excel):
@@ -537,6 +575,7 @@ if __name__ == "__main__":
     scheduler = ExamScheduler(
         exams_file=r"C:\\Users\\User\\Downloads\\FakedNarxozData (2).xlsx",
         rooms_file=r"C:\\Users\\User\\Downloads\\auditoriums.xlsx",
+        faculties_file=r"C:\Users\User\Documents\Faculties.xlsx",
         start_date='2024-01-15',
         num_days=14
     )
