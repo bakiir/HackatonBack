@@ -10,6 +10,7 @@ CORS(app)  # Разрешаем CORS для работы с фронтендом
 scheduler = ExamScheduler(
     exams_file=r"C:\Users\User\Downloads\FakedNarxozData (2).xlsx",
     rooms_file=r"C:\Users\User\Downloads\auditoriums.xlsx",
+    faculties_file=r"C:\Users\User\Documents\Faculties.xlsx",
     start_date='2024-01-15',
     num_days=14
 )
@@ -24,7 +25,7 @@ def get_schedule():
 
 
 @app.route('/schedule/stats')
-def get_schedule_stats():
+def get_schedule_stats(successful_exa1ms=None):
     """Получение статистики по расписанию"""
     try:
         total_exams = len(scheduler.exam_groups)  # Общее количество экзаменов
