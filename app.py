@@ -2,6 +2,8 @@ from flask import Flask, jsonify, send_file
 from flask_cors import CORS
 from xx import ExamScheduler  # импортируем ваш класс из файла xx.py
 import numpy as np
+from flask import request
+
 
 app = Flask(__name__)
 CORS(app)  # Разрешаем CORS для работы с фронтендом
@@ -10,6 +12,7 @@ CORS(app)  # Разрешаем CORS для работы с фронтендом
 scheduler = ExamScheduler(
     exams_file=r"C:\Users\User\Downloads\FakedNarxozData (2).xlsx",
     rooms_file=r"C:\Users\User\Downloads\auditoriums.xlsx",
+    faculties_file=r"C:\Users\User\Documents\Faculties.xlsx",
     start_date='2024-01-15',
     num_days=14
 )
@@ -24,7 +27,7 @@ def get_schedule():
 
 
 @app.route('/schedule/stats')
-def get_schedule_stats():
+def get_schedule_stats(successful_exa1ms=None):
     """Получение статистики по расписанию"""
     try:
         total_exams = len(scheduler.exam_groups)  # Общее количество экзаменов
@@ -43,6 +46,25 @@ def get_schedule_stats():
             'error': str(e)
         }), 500
 
+
+@app.route('/schedule/edit/<int:index>', methods=['POST'])
+def edit_schedule(index):
+    """Редактирование конкретной записи в расписании"""
+    try:
+        data = request.json  # Получаем данные для обновления
+        scheduler.edit_schedule_entry(index, **data)
+        scheduler.save_schedule("updated_schedule.xlsx")  # Сохраняем изменения
+
+        return jsonify({
+            'success': True,
+            'message': f'Запись {index} успешно обновлена',
+            'updated_schedule': scheduler.schedule_df.to_dict('records')  # Отправляем обновленный вид
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 @app.route('/schedule/student/<student_id>')
