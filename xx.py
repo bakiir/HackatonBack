@@ -30,7 +30,7 @@ class ExamScheduler:
 
         # Группировка экзаменов по секциям
         self.exam_groups = self.exams_df.drop_duplicates(subset=['Section'], keep='first').groupby(
-            ['Subject', 'Instructor', 'Course', 'EduProgram', 'YearsOfStudy', 'Section']
+            ['Subject', 'Instructor', 'EduProgram', 'YearsOfStudy', 'Section']
         ).agg({'fake_id': 'count'}).reset_index()
 
         self.instructors = list(self.exam_groups['Instructor'].unique())
@@ -91,7 +91,7 @@ class ExamScheduler:
     def get_student_sections(self, student_id):
         logging.info(f"Поиск секций для студента {student_id}.")
         student_sections = self.exams_df[self.exams_df['fake_id'] == student_id][
-            ['Subject', 'Instructor', 'Course', 'EduProgram', 'YearsOfStudy', 'Section']
+            ['Subject', 'Instructor', 'EduProgram', 'YearsOfStudy', 'Section']
         ]
 
         if student_sections.empty:
@@ -221,9 +221,7 @@ class ExamScheduler:
                     'Date': exam_date,
                     'Subject': section_data['Subject'],
                     'Instructor': section_data['Instructor'],
-                    'Course': section_data['Course'],
                     'EduProgram': section_data['EduProgram'],
-                    'YearsOfStudy': section_data['YearsOfStudy'],
                     'Section': section,
                     'Students_Count': num_students,
                     'Room': best_room,
@@ -374,7 +372,6 @@ class ExamScheduler:
             'section_info': {
                 'instructor': section_data['Instructor'].iloc[0],
                 'subject': section_data['Subject'].iloc[0],
-                'course': section_data['Course'].iloc[0],
                 'edu_program': section_data['EduProgram'].iloc[0],
                 'years_of_study': section_data['YearsOfStudy'].iloc[0],
                 'total_students': len(section_data)
@@ -416,7 +413,6 @@ class ExamScheduler:
             'Section ID': [section_info['section_id']],
             'Instructor': [section_info['section_info']['instructor']],
             'Subject': [section_info['section_info']['subject']],
-            'Course': [section_info['section_info']['course']],
             'EduProgram': [section_info['section_info']['edu_program']],
             'YearsOfStudy': [section_info['section_info']['years_of_study']],
             'Total Students': [section_info['section_info']['total_students']]
@@ -503,7 +499,6 @@ class ExamScheduler:
             program_groups = subject_groups[subject_groups['EduProgram'] == edu_program]
             for idx, group in program_groups.iterrows():
                 print(f"Секция: {group['Section']}")
-                print(f"Курс: {group['Course']}")
                 print(f"Преподаватель: {group['Instructor']}")
                 print(f"Количество студентов: {group['fake_id']}")
                 print("-" * 20)
@@ -568,10 +563,26 @@ class ExamScheduler:
         # Пересчитываем данные
         self._prepare_data()
 
+    def load_schedule(self, input_excel):
+        logging.info("Загрузка расписания из файла.")
+        self.schedule_df = pd.read_excel(input_excel)
+        logging.info("Расписание успешно загружено.")
 
+    def edit_schedule_entry(self, index, **kwargs):
+        logging.info(f"Редактирование записи расписания (индекс {index})")
+        for key, value in kwargs.items():
+            if key in self.schedule_df.columns:
+                self.schedule_df.at[index, key] = value
+        logging.info("Изменения внесены.")
+
+    def save_schedule(self, output_excel):
+        logging.info("Сохранение изменений расписания в файл.")
+        self.schedule_df.to_excel(output_excel, index=False)
+        logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
 
 
 if __name__ == "__main__":
+    # Инициализация планировщика с файлами данных
     scheduler = ExamScheduler(
         exams_file=r"C:\\Users\\User\\Downloads\\FakedNarxozData (2).xlsx",
         rooms_file=r"C:\\Users\\User\\Downloads\\auditoriums.xlsx",
@@ -580,28 +591,30 @@ if __name__ == "__main__":
         num_days=14
     )
 
+    # 1. Создание нового расписания
+    scheduler.create_schedule()
+    scheduler.export_schedule("general_schedule.xlsx")
 
-    # Создание общего расписания
-    scheduler.run_scheduling_process()
+    # 2. Загрузка существующего расписания
+    scheduler.load_schedule("general_schedule.xlsx")
 
-    # Поиск свободных аудиторий
-    day = "2024-01-16"  # Пример даты
-    time_slot = "08:00-11:00"  # Пример временного слота
+    # 3. Поиск свободных аудиторий в определенный день и слот
+    day = "2024-01-16"
+    time_slot = "08:00-11:00"
     available_rooms = scheduler.find_available_rooms(day, time_slot)
 
     print(f"Свободные аудитории на {day} в слот {time_slot}:")
     for room in available_rooms:
         print(room)
 
-    # scheduler.show_subjects_and_delete()
-    #
-    # # После удаления можно пересоздать или обновить расписание
-    # scheduler.create_schedule()
-    # scheduler.export_schedule("updated_schedule.xlsx")
-    #
-    # Экспорт общего расписания в Excel
+    # 4. Изменение конкретной записи в расписании (например, смена проктора)
+    scheduler.edit_schedule_entry(5, Proctor="Новый Проктор")
 
-    scheduler.export_schedule("general_schedule.xlsx")
+    # 5. Изменение аудитории и временного слота для экзамена
+    scheduler.edit_schedule_entry(3, Аудитория="101", TimeSlot="11:30-14:30")
+
+    # 6. Сохранение обновленного расписания
+    scheduler.save_schedule("updated_schedule.xlsx")
     #
     # # Вывод расписания для конкретного студента в консоль
     # student_id = "Student0001"
