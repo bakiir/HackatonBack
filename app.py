@@ -20,11 +20,26 @@ scheduler = ExamScheduler(
 # Создание расписания при запуске
 scheduler.run_scheduling_process()
 
+def handle_nan_values(obj):
+    """
+    Обрабатывает NaN значения в объекте, заменяя их на None для JSON-сериализации
+    """
+    if isinstance(obj, (float, np.float64, np.float32)) and (math.isnan(obj) or np.isnan(obj)):
+        return None
+    elif isinstance(obj, dict):
+        return {key: handle_nan_values(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [handle_nan_values(item) for item in obj]
+    elif isinstance(obj, pd.DataFrame):
+        return obj.replace({np.nan: None}).to_dict('records')
+    else:
+        return obj
+
 @app.route('/schedule')
 def get_schedule():
     """Получение общего расписания"""
-    return jsonify(scheduler.schedule_df.to_dict('records'))
-
+    schedule_data = scheduler.schedule_df.replace({np.nan: None}).to_dict('records')
+    return jsonify(schedule_data)
 
 @app.route('/schedule/stats')
 def get_schedule_stats(successful_exa1ms=None):
@@ -39,6 +54,24 @@ def get_schedule_stats(successful_exa1ms=None):
             'total_exams': total_exams,
             'successful_exams': successful_exams,
             'failed_exams': failed_exams
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/proctors', methods=['GET'])
+def get_proctors():
+    """Получение полного списка всех доступных прокторов"""
+    try:
+        unique_proctors = scheduler.get_all_proctors()
+
+        return jsonify({
+            'success': True,
+            'count': len(unique_proctors),
+            'proctors': unique_proctors
         })
     except Exception as e:
         return jsonify({
