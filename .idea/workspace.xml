@@ -326,7 +326,8 @@
       <workItem from="1740463010035" duration="3000" />
       <workItem from="1740466454144" duration="547000" />
       <workItem from="1740486744175" duration="343000" />
-      <workItem from="1740488490379" duration="1667000" />
+      <workItem from="1740488490379" duration="3016000" />
+      <workItem from="1740493726778" duration="2639000" />
     </task>
     <task id="LOCAL-00001" summary="первый коммит">
       <option name="closed" value="true" />
@@ -371,7 +372,7 @@
     <SUITE FILE_PATH="coverage/pythonProject1$xx.coverage" NAME="xx Coverage Results" MODIFIED="1740205400124" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pythonProject1$claudeHtml.coverage" NAME="claudeHtml Coverage Results" MODIFIED="1736361015366" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pythonProject1$activate_this.coverage" NAME="activate_this Coverage Results" MODIFIED="1726051670817" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/.venv/Scripts" />
-    <SUITE FILE_PATH="coverage/pythonProject1$pythonProject1.coverage" NAME="pythonProject1 Coverage Results" MODIFIED="1740489865330" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/pythonProject1$pythonProject1.coverage" NAME="pythonProject1 Coverage Results" MODIFIED="1740496583169" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
     <SUITE FILE_PATH="coverage/pythonProject1$geneticVersion.coverage" NAME="geneticVersion Coverage Results" MODIFIED="1736516023558" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pythonProject1$xxSection.coverage" NAME="xxSection Coverage Results" MODIFIED="1737025822264" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pythonProject1$greedyVersion.coverage" NAME="greedyVersion Coverage Results" MODIFIED="1736516518385" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
