@@ -2,8 +2,6 @@ import random
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
-from openpyxl import load_workbook
-
 
 # Рандомизация порядка слотов
 
@@ -92,16 +90,26 @@ class ExamScheduler:
 
     def get_student_sections(self, student_id):
         logging.info(f"Поиск секций для студента {student_id}.")
-        student_sections = self.exams_df[self.exams_df['fake_id'] == student_id][
-            ['Subject', 'Instructor', 'EduProgram', 'YearsOfStudy', 'Section']
-        ]
 
-        if student_sections.empty:
+        # Проверяем, создано ли расписание
+        if self.schedule_df is None:
+            logging.warning("Расписание не создано. Сначала создайте расписание.")
+            return pd.DataFrame()
+
+        # Получаем все секции, в которых участвует студент
+        student_sections = self.exams_df[self.exams_df['fake_id'] == student_id]['Section'].unique()
+
+        if len(student_sections) == 0:
             logging.warning(f"Для студента {student_id} не найдено секций.")
-            return student_sections
+            return pd.DataFrame()
 
-        # Используем общее расписание
-        student_schedule = self.schedule_df[self.schedule_df['Section'].isin(student_sections['Section'])]
+        # Фильтруем общее расписание по секциям студента
+        student_schedule = self.schedule_df[self.schedule_df['Section'].isin(student_sections)]
+
+        # Сортируем по дате и времени
+        if not student_schedule.empty:
+            student_schedule = student_schedule.sort_values(['Date', 'Time_Slot'])
+
         return student_schedule
 
     def assign_proctors(self):
@@ -603,117 +611,17 @@ class ExamScheduler:
         self.schedule_df = pd.read_excel(input_excel)
         logging.info("Расписание успешно загружено.")
 
-    def edit_schedule_entry(self, section, room=None, date=None, time_slot=None, proctor=None):
-        """
-        Редактирует запись в расписании по указанной секции.
-        Изменяет указанные поля (аудитория, дата, время, проктор) в DataFrame.
-
-        Args:
-            section (str): Идентификатор секции (например, 'OPMat 23-603-Ch').
-            room (str, optional): Новая аудитория. Если None, аудитория не изменяется.
-            date (str, optional): Новая дата в формате 'YYYY-MM-DD'. Если None, дата не изменяется.
-            time_slot (str, optional): Новый временной слот. Если None, время не изменяется.
-            proctor (str, optional): Новый проктор. Если None, проктор не изменяется.
-
-        Raises:
-            ValueError: Если секция не найдена в расписании или данные некорректны.
-        """
-        logging.info(f"Редактирование записи расписания для секции: {section}")
-
-        # Проверяем, загружено ли расписание
-        if self.schedule_df is None:
-            raise ValueError("Расписание не загружено.")
-
-        # Ищем запись по секции
-        if section not in self.schedule_df['Section'].values:
-            raise ValueError(f"Секция {section} не найдена в расписании.")
-
-        # Находим индекс строки с указанной секцией
-        index = self.schedule_df[self.schedule_df['Section'] == section].index[0]
-
-        # Вносим изменения
-        if room is not None:
-            self.schedule_df.at[index, 'Room'] = room
-            logging.info(f"Аудитория изменена на: {room}")
-        if date is not None:
-            # Проверяем формат даты
-            try:
-                datetime.strptime(date, '%Y-%m-%d')  # Проверка формата даты
-                self.schedule_df.at[index, 'Date'] = date
-                logging.info(f"Дата изменена на: {date}")
-            except ValueError:
-                raise ValueError("Некорректный формат даты. Ожидается 'YYYY-MM-DD'.")
-        if time_slot is not None:
-            self.schedule_df.at[index, 'Time_Slot'] = time_slot
-            logging.info(f"Временной слот изменен на: {time_slot}")
-        if proctor is not None:
-            self.schedule_df.at[index, 'Proctor'] = proctor
-            logging.info(f"Проктор изменен на: {proctor}")
-
-        logging.info(f"Запись для секции {section} успешно изменена.")
+    def edit_schedule_entry(self, index, **kwargs):
+        logging.info(f"Редактирование записи расписания (индекс {index})")
+        for key, value in kwargs.items():
+            if key in self.schedule_df.columns:
+                self.schedule_df.at[index, key] = value
+        logging.info("Изменения внесены.")
 
     def save_schedule(self, output_excel):
-        """
-        Сохраняет изменения в Excel-файл, обновляя только измененные строки.
-        """
         logging.info("Сохранение изменений расписания в файл.")
-
-        try:
-            # Загружаем существующий файл
-            book = load_workbook(output_excel)
-            writer = pd.ExcelWriter(output_excel, engine='openpyxl')
-            writer.book = book
-
-            # Перезаписываем лист с расписанием
-            if 'Расписание' in book.sheetnames:
-                std = book['Расписание']
-                book.remove(std)  # Удаляем старый лист
-            self.schedule_df.to_excel(writer, sheet_name='Расписание', index=False)
-
-            # Сохраняем изменения
-            writer.save()
-            logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
-        except Exception as e:
-            logging.error(f"Ошибка при сохранении файла: {str(e)}")
-            raise
-
-    def update_schedule_entry(self, output_excel, section, room=None, date=None, time_slot=None, proctor=None):
-        """
-        Обновляет конкретную запись в Excel-файле без перезаписи всего файла.
-        """
-        logging.info(f"Обновление записи для секции {section} в файле {output_excel}.")
-
-        try:
-            # Загружаем существующий файл
-            book = load_workbook(output_excel)
-            sheet = book['Расписание']
-
-            # Ищем строку с указанной секцией
-            row_index = None
-            for row in sheet.iter_rows(min_row=2, values_only=True):  # Пропускаем заголовок
-                if row[3] == section:  # Предполагаем, что секция находится в 4-м столбце
-                    row_index = row[0]  # Предполагаем, что индекс строки находится в 1-м столбце
-                    break
-
-            if row_index is None:
-                raise ValueError(f"Секция {section} не найдена в файле.")
-
-            # Обновляем данные
-            if room is not None:
-                sheet.cell(row=row_index, column=5, value=room)  # Предполагаем, что аудитория в 5-м столбце
-            if date is not None:
-                sheet.cell(row=row_index, column=2, value=date)  # Предполагаем, что дата во 2-м столбце
-            if time_slot is not None:
-                sheet.cell(row=row_index, column=3, value=time_slot)  # Предполагаем, что время в 3-м столбце
-            if proctor is not None:
-                sheet.cell(row=row_index, column=6, value=proctor)  # Предполагаем, что проктор в 6-м столбце
-
-            # Сохраняем изменения
-            book.save(output_excel)
-            logging.info(f"Запись для секции {section} успешно обновлена в файле {output_excel}.")
-        except Exception as e:
-            logging.error(f"Ошибка при обновлении файла: {str(e)}")
-            raise
+        self.schedule_df.to_excel(output_excel, index=False)
+        logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
 
 
 if __name__ == "__main__":

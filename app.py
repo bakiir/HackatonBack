@@ -1,10 +1,9 @@
 from flask import Flask, jsonify, send_file
-import logging
 from flask_cors import CORS
 from xx import ExamScheduler  # импортируем ваш класс из файла xx.py
 import numpy as np
-from flask import request
-
+import math
+import pandas as pd
 
 app = Flask(__name__)
 CORS(app)  # Разрешаем CORS для работы с фронтендом
@@ -42,6 +41,7 @@ def get_schedule():
     schedule_data = scheduler.schedule_df.replace({np.nan: None}).to_dict('records')
     return jsonify(schedule_data)
 
+
 @app.route('/schedule/stats')
 def get_schedule_stats(successful_exa1ms=None):
     """Получение статистики по расписанию"""
@@ -63,67 +63,6 @@ def get_schedule_stats(successful_exa1ms=None):
         }), 500
 
 
-@app.route('/proctors', methods=['GET'])
-def get_proctors():
-    """Получение полного списка всех доступных прокторов"""
-    try:
-        unique_proctors = scheduler.get_all_proctors()
-
-        return jsonify({
-            'success': True,
-            'count': len(unique_proctors),
-            'proctors': unique_proctors
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-
-@app.route('/schedule/edit/<string:section>', methods=['POST'])
-def edit_schedule(section):
-    """Редактирование записи в расписании по Section."""
-    logging.info(f"Получен запрос на редактирование секции: {section}")
-
-    try:
-        # Получаем данные из JSON
-        data = request.json
-        if not data:
-            logging.warning("Нет данных для обновления.")
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            }), 400
-
-        # Проверяем, что хотя бы одно поле передано
-        if not any([data.get('room'), data.get('date'), data.get('time_slot'), data.get('proctor')]):
-            logging.warning("Все поля для обновления пусты.")
-            return jsonify({
-                'success': False,
-                'error': 'At least one field (room, date, time_slot, proctor) must be provided'
-            }), 400
-
-        # Редактируем запись в DataFrame
-        scheduler.edit_schedule_entry(
-            section=section,
-            room=data.get('room'),
-            date=data.get('date'),
-            time_slot=data.get('time_slot'),
-            proctor=data.get('proctor')
-        )
-
-        return jsonify({
-            'success': True,
-            'message': f'Запись для секции {section} успешно обновлена',
-            'updated_schedule': scheduler.schedule_df.to_dict('records')
-        })
-    except Exception as e:
-        logging.error(f"Ошибка при обработке запроса: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
 
 @app.route('/schedule/student/<student_id>')
 def get_student_schedule(student_id):
