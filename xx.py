@@ -26,34 +26,7 @@ class ExamScheduler:
     def _prepare_data(self):
         logging.info("Подготовка данных для планирования.")
 
-        # Проверка и заполнение exams_df
-        if 'Section' not in self.exams_df.columns:
-            self.exams_df['Section'] = (
-                    self.exams_df['Subject'] + '-' +
-                    self.exams_df['EduProgram'] + '-' +
-                    self.exams_df['YearsOfStudy'].astype(str)
-            )
-        self.exams_df['Instructor'] = self.exams_df['Instructor'].fillna('Неизвестный преподаватель')
-        self.exams_df = self.exams_df.drop_duplicates(subset=['Section'])
-
-        # Проверка и заполнение rooms_df
-        if 'Вместительность аудитории' not in self.rooms_df.columns:
-            self.rooms_df['Вместительность аудитории'] = 30
-        self.rooms_df['Вместительность аудитории'] = pd.to_numeric(
-            self.rooms_df['Вместительность аудитории'],
-            errors='coerce'
-        ).fillna(30)
-        self.rooms_df = self.rooms_df.drop_duplicates(subset=['Аудитория'])
-
-        # Проверка и заполнение faculties_df
-        self.faculties_df['Faculty'] = self.faculties_df['Faculty'].fillna('Общий факультет')
-        missing_subjects = set(self.exams_df['Subject']) - set(self.faculties_df['Subject'])
-        if missing_subjects:
-            new_rows = [{'Subject': subject, 'Faculty': 'Общий факультет'} for subject in missing_subjects]
-            self.faculties_df = pd.concat([self.faculties_df, pd.DataFrame(new_rows)], ignore_index=True)
-
-        # Подготовка данных
-        self.exam_groups = self.exams_df.groupby(
+        self.exam_groups = self.exams_df.drop_duplicates(subset=['Section'], keep='first').groupby(
             ['Subject', 'Instructor', 'EduProgram', 'YearsOfStudy', 'Section']
         ).agg({'fake_id': 'count'}).reset_index()
 
