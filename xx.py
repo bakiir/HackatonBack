@@ -67,16 +67,11 @@ class ExamScheduler:
             else:
                 print("Неверный выбор. Пожалуйста, выберите 1 или 2")
 
+    def run_scheduling_process(self, skip_management=False):
+        if not skip_management:
+            # Переносим логику в API
+            pass
 
-
-    def run_scheduling_process(self):
-
-        print("\nНачало процесса планирования экзаменов")
-        print("Сначала вы можете просмотреть и удалить ненужные предметы/секции.")
-
-        self.manage_subjects_before_scheduling()
-
-        print("\nНачинаем генерацию расписания...")
         self.create_schedule()
         print("Расписание успешно создано!")
 
