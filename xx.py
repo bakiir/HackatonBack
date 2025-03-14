@@ -2,10 +2,9 @@ import random
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
+from openpyxl import load_workbook
 
-# Рандомизация порядка слотов
 
-# Настройка логгера
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ExamScheduler:
@@ -17,18 +16,16 @@ class ExamScheduler:
 
         self.start_date = datetime.strptime(start_date, '%Y-%m-%d') if start_date else datetime.now()
         self.num_days = num_days
-        self.schedule_df = None  # Атрибут для хранения расписания
+        self.schedule_df = None
 
         self.time_slots = ["08:00-11:00", "11:30-14:30", "15:00-18:00"]
         self.days = [self.start_date + timedelta(days=i) for i in range(self.num_days)]
 
-        # Подготовка данных
         self._prepare_data()
 
     def _prepare_data(self):
         logging.info("Подготовка данных для планирования.")
 
-        # Группировка экзаменов по секциям
         self.exam_groups = self.exams_df.drop_duplicates(subset=['Section'], keep='first').groupby(
             ['Subject', 'Instructor', 'EduProgram', 'YearsOfStudy', 'Section']
         ).agg({'fake_id': 'count'}).reset_index()
@@ -39,24 +36,21 @@ class ExamScheduler:
             self.rooms_df['Аудитория'], self.rooms_df['Вместительность аудитории']
         ))
 
-        # Создаем словарь всех студентов для быстрого доступа
         self.all_students_dict = self.exams_df[['fake_id', 'fake_name']].drop_duplicates().to_dict('records')
 
-        # Создаем словарь факультетов по предметам
         self.subject_faculty_map = self.faculties_df.groupby('Subject')['Faculty'].apply(set).to_dict()
 
-        # Словарь, где ключ - факультет, значение - список возможных прокторов
         self.faculty_proctors = self.faculties_df.groupby('Faculty')['Instructor'].apply(list).to_dict()
 
         total_slots = len(self.rooms) * len(self.time_slots) * self.num_days
         logging.info(f"Всего экзаменов: {len(self.exam_groups)}")
         logging.info(f"Всего временных слотов: {total_slots}")
 
+
+
+
     def manage_subjects_before_scheduling(self):
-        """
-        Управление предметами перед созданием расписания.
-        Позволяет просматривать и удалять предметы/секции до генерации расписания.
-        """
+
         while True:
             print("\n=== Управление предметами перед составлением расписания ===")
             print("1. Показать все предметы и их секции")
@@ -73,44 +67,42 @@ class ExamScheduler:
             else:
                 print("Неверный выбор. Пожалуйста, выберите 1 или 2")
 
+
+
     def run_scheduling_process(self):
-        """
-        Основной процесс планирования экзаменов с предварительным управлением предметами.
-        """
+
         print("\nНачало процесса планирования экзаменов")
         print("Сначала вы можете просмотреть и удалить ненужные предметы/секции.")
 
-        # Управление предметами перед планированием
         self.manage_subjects_before_scheduling()
 
-        # Создание расписания
         print("\nНачинаем генерацию расписания...")
         self.create_schedule()
         print("Расписание успешно создано!")
 
+
+
     def get_student_sections(self, student_id):
         logging.info(f"Поиск секций для студента {student_id}.")
 
-        # Проверяем, создано ли расписание
         if self.schedule_df is None:
             logging.warning("Расписание не создано. Сначала создайте расписание.")
             return pd.DataFrame()
 
-        # Получаем все секции, в которых участвует студент
         student_sections = self.exams_df[self.exams_df['fake_id'] == student_id]['Section'].unique()
 
         if len(student_sections) == 0:
             logging.warning(f"Для студента {student_id} не найдено секций.")
             return pd.DataFrame()
 
-        # Фильтруем общее расписание по секциям студента
         student_schedule = self.schedule_df[self.schedule_df['Section'].isin(student_sections)]
 
-        # Сортируем по дате и времени
         if not student_schedule.empty:
             student_schedule = student_schedule.sort_values(['Date', 'Time_Slot'])
 
         return student_schedule
+
+
 
     def assign_proctors(self):
         logging.info("Назначение прокторов.")
@@ -124,46 +116,41 @@ class ExamScheduler:
                 assigned_proctors.append(None)
                 continue
 
-            exam_faculty = exam_faculty[0]  # Берем первый факультет из списка (если их несколько)
+            exam_faculty = exam_faculty[0]
 
             if exam_faculty == 'ШЦТ':
-                # Для ШЦТ берем только прокторов из ШЦТ
                 possible_proctors = self.faculty_proctors.get('ШЦТ', [])
             else:
-                # Для остальных факультетов исключаем их же и исключаем прокторов из ШЦТ
                 possible_proctors = [
                     instr for fac, instrs in self.faculty_proctors.items()
                     if fac not in (exam_faculty, 'ШЦТ') for instr in instrs
                 ]
 
-            # Назначаем случайного проктора
             assigned_proctors.append(random.choice(possible_proctors) if possible_proctors else None)
 
         self.schedule_df['Proctor'] = assigned_proctors
         logging.info("Прокторы успешно назначены.")
 
-    def get_all_proctors(self):
-        """
-        Получает полный список всех доступных прокторов.
 
-        Returns:
-            list: Список всех прокторов из всех факультетов
-        """
+
+
+    def get_all_proctors(self):
+
         logging.info("Получение полного списка прокторов.")
 
-        # Собираем всех прокторов из словаря faculty_proctors
         all_proctors = []
         for faculty, proctors in self.faculty_proctors.items():
             all_proctors.extend(proctors)
 
-        # Фильтруем список, оставляя только строки
         filtered_proctors = [p for p in all_proctors if isinstance(p, str)]
 
-        # Удаляем дубликаты и сортируем список
         unique_proctors = sorted(set(filtered_proctors))
 
         logging.info(f"Найдено {len(unique_proctors)} уникальных прокторов.")
         return unique_proctors
+
+
+
 
     def create_schedule(self):
         logging.info("Создание расписания")
@@ -171,13 +158,11 @@ class ExamScheduler:
         student_exams_per_day = {}
         failed_sections = []
 
-        # Словарь для отслеживания занятости аудиторий
         self.room_availability = {
             day: {slot: set() for slot in self.time_slots}
             for day in self.days
         }
 
-        # Получаем информацию о секциях с количеством студентов
         sections_df = self.exam_groups.copy()
         sections_df['student_count'] = sections_df['Section'].map(
             self.exams_df.groupby('Section')['fake_id'].nunique()
@@ -186,7 +171,6 @@ class ExamScheduler:
 
         scheduled_sections = set()
 
-        # Словарь для подсчета использования каждого слота
         slot_usage_count = {
             slot: 0 for slot in self.time_slots
         }
@@ -199,57 +183,45 @@ class ExamScheduler:
             section_students = self.exams_df[self.exams_df['Section'] == section]['fake_id'].unique()
             num_students = len(section_students)
 
-            best_slots = []  # Список кортежей (день, слот, аудитория, кол-во конфликтов)
+            best_slots = []
 
-            # Перебираем все возможные комбинации дней и слотов
             for day in self.days:
                 exam_date = day.strftime('%Y-%m-%d')
 
-                # Рандомизируем порядок временных слотов для более равномерного распределения
                 time_slots = list(self.time_slots)
                 random.shuffle(time_slots)
 
                 for time_slot in time_slots:
-                    # Считаем конфликты со студентами
                     student_conflicts = sum(
                         1 for student in section_students
                         if student_exams_per_day.get(student, {}).get(exam_date, 0) == 1
                     )
 
-                    # Ищем подходящие аудитории
                     available_rooms = [
                         room for room in self.rooms
                         if (num_students <= self.room_capacities[room] and
                             room not in self.room_availability[day][time_slot])
                     ]
 
-                    # Если нашли подходящую аудиторию
                     if available_rooms:
-                        # Выбираем аудиторию, которая лучше всего подходит по размеру
                         best_room = min(
                             available_rooms,
                             key=lambda r: abs(self.room_capacities[r] - num_students)
                         )
 
-                        # Добавляем этот вариант в список возможных слотов
                         best_slots.append((day, time_slot, best_room, student_conflicts, slot_usage_count[time_slot]))
 
-            # Если нашли хотя бы один приемлемый вариант
             if best_slots:
-                # Сначала сортируем по количеству конфликтов
                 best_slots.sort(key=lambda x: x[3])
 
-                # Берем все варианты с минимальным количеством конфликтов
                 min_conflicts = best_slots[0][3]
                 best_slots_with_min_conflicts = [slot for slot in best_slots if slot[3] == min_conflicts]
 
-                # Из них выбираем слот, который меньше всего использовался
                 best_day, best_slot, best_room, min_conflicts, _ = min(
                     best_slots_with_min_conflicts,
                     key=lambda x: x[4]
                 )
 
-                # Увеличиваем счетчик использования выбранного слота
                 slot_usage_count[best_slot] += 1
 
                 exam_date = best_day.strftime('%Y-%m-%d')
@@ -279,16 +251,13 @@ class ExamScheduler:
                     'students_count': num_students
                 })
 
-        # Сортируем расписание по дате и слоту для удобства
         schedule.sort(key=lambda x: (x['Date'], x['Time_Slot']))
 
-        # Анализ использования слотов
         slot_usage = {day: {slot: 0 for slot in self.time_slots} for day in self.days}
         for exam in schedule:
             day = datetime.strptime(exam['Date'], '%Y-%m-%d')
             slot_usage[day][exam['Time_Slot']] += 1
 
-        # Выводим статистику использования слотов
         for day in self.days:
             total_slots = len(self.time_slots)
             used_slots = sum(1 for slot in self.time_slots if slot_usage[day][slot] > 0)
@@ -296,7 +265,6 @@ class ExamScheduler:
             for slot in self.time_slots:
                 logging.info(f"  Слот {slot}: {slot_usage[day][slot]} экзаменов")
 
-        # Выводим общую статистику использования слотов
         logging.info("Общая статистика использования слотов:")
         for slot in self.time_slots:
             total = sum(slot_usage[day][slot] for day in self.days)
@@ -320,44 +288,33 @@ class ExamScheduler:
         self.schedule_df.to_excel(output_excel, index=False)
         logging.info(f"Расписание сохранено в файл {output_excel}.")
 
+
     def export_html_schedule(self, output_html):
         logging.info("Экспорт общего расписания в файл HTML.")
         self.schedule_df.to_html(output_html, index=False)
         logging.info(f"Расписание сохранено в файл {output_html}.")
 
+
     def find_available_rooms(self, day, time_slot):
-        """
-        Поиск свободных аудиторий в указанный день и временной слот.
-
-        Args:
-            day (str): Дата в формате 'YYYY-MM-DD'.
-            time_slot (str): Временной слот (например, '08:00-11:00').
-
-        Returns:
-            list: Список свободных аудиторий.
-        """
         logging.info(f"Поиск свободных аудиторий на {day} в слот {time_slot}.")
 
-        # Преобразуем день в datetime объект
         try:
-            day = datetime.strptime(day, '%Y-%m-%d')
+            day = datetime.strptime(day, '%d-%m-%Y')
         except ValueError:
             logging.error(f"Некорректный формат даты: {day}. Ожидается 'YYYY-MM-DD'.")
             return []
 
-        # Проверяем, есть ли информация о занятости для этого дня и слота
         if day not in self.room_availability or time_slot not in self.room_availability[day]:
             logging.warning(f"Нет данных о занятости для {day} и слота {time_slot}.")
             return self.rooms  # Если данных нет, считаем все аудитории свободными
 
-        # Находим занятые аудитории в этот день и слот
         busy_rooms = self.room_availability[day][time_slot]
 
-        # Находим свободные аудитории
         available_rooms = [room for room in self.rooms if room not in busy_rooms]
 
         logging.info(f"Найдено {len(available_rooms)} свободных аудиторий.")
         return available_rooms
+
 
     def print_student_schedule(self, student_id):
         student_schedule = self.get_student_sections(student_id)
@@ -375,6 +332,8 @@ class ExamScheduler:
             print(f"Аудитория: {row['Room']}")
             print("-" * 50)
 
+
+
     def export_student_schedule_to_excel(self, student_id, output_file):
         student_schedule = self.get_student_sections(student_id)
         if student_schedule.empty:
@@ -386,20 +345,10 @@ class ExamScheduler:
 
 
 
-    # session info
     def get_section_info(self, section_id):
-        """
-        Получение полной информации о секции, включая список студентов, участвующих в данной секции.
 
-        Args:
-            section_id (str): Идентификатор секции (например, 'KRL 1104-34-Ch')
-
-        Returns:
-            dict: Полная информация о секции, включая список студентов и расписание
-        """
         logging.info(f"Поиск информации для секции: {section_id}")
 
-        # Получаем данные о секции
         section_data = self.exams_df[self.exams_df['Section'] == section_id]
 
         if section_data.empty:
@@ -409,7 +358,6 @@ class ExamScheduler:
                 'message': f'Секция {section_id} не найдена в базе данных'
             }
 
-        # Получаем базовую информацию о секции
         section_info = {
             'section_id': section_id,
             'section_info': {
@@ -421,7 +369,6 @@ class ExamScheduler:
             }
         }
 
-        # Добавляем информацию о расписании
         if self.schedule_df is not None:
             schedule_info = self.schedule_df[self.schedule_df['Section'] == section_id].to_dict('records')
             if schedule_info:
@@ -431,7 +378,6 @@ class ExamScheduler:
         else:
             section_info['schedule'] = None
 
-        # Добавляем список студентов секции
         section_students = section_data[['fake_id', 'fake_name']].drop_duplicates().to_dict('records')
         section_info['students'] = section_students
 
@@ -442,13 +388,7 @@ class ExamScheduler:
 
 
     def export_section_info_to_excel(self, section_info, output_file):
-        """
-        Экспорт информации о секции в Excel файл с основными данными и списком студентов.
 
-        Args:
-            section_info (dict): Информация о секции, полученная из метода get_section_info.
-            output_file (str): Путь к файлу для сохранения.
-        """
         logging.info(f"Экспорт информации о секции в файл {output_file}.")
 
         # Создаем DataFrame для основной информации о секции
@@ -476,23 +416,17 @@ class ExamScheduler:
 
         logging.info(f"Информация о секции успешно сохранена в файл {output_file}.")
 
-    def get_unique_subjects(self):
-        """
-        Получение списка всех уникальных предметов.
 
-        Returns:
-            list: Список уникальных предметов
-        """
+    def get_unique_subjects(self):
+
         unique_subjects = sorted(self.exam_groups['Subject'].unique())
         return unique_subjects
 
+
     def show_subjects_and_delete(self):
-        """
-        Показывает список всех предметов и позволяет выбрать предмет для удаления.
-        """
+
         logging.info("Получение списка уникальных предметов")
 
-        # Получаем и показываем все уникальные предметы
         subjects = self.get_unique_subjects()
         print("\nСписок всех предметов:")
         for idx, subject in enumerate(subjects, 1):
@@ -514,27 +448,21 @@ class ExamScheduler:
             except ValueError:
                 print("Пожалуйста, введите число")
 
-    def delete_subject_groups(self, subject):
-        """
-        Показывает группы выбранного предмета и позволяет удалить их.
 
-        Args:
-            subject (str): Название выбранного предмета
-        """
+
+    def delete_subject_groups(self, subject):
+
         logging.info(f"Поиск групп для предмета: {subject}")
 
-        # Находим все группы с указанным предметом
         subject_groups = self.exam_groups[self.exam_groups['Subject'] == subject]
 
         if subject_groups.empty:
             logging.warning(f"Группы для предмета {subject} не найдены")
             return False
 
-        # Выводим информацию о группах
         print(f"\nГруппы по предмету {subject}:")
         print("=" * 50)
 
-        # Группируем по образовательной программе для лучшей читаемости
         for edu_program in subject_groups['EduProgram'].unique():
             print(f"\nПрограмма: {edu_program}")
             print("-" * 30)
@@ -587,12 +515,7 @@ class ExamScheduler:
                 print("Неверный выбор. Пожалуйста, выберите 1, 2 или 3")
 
     def _delete_sections(self, sections):
-        """
-        Вспомогательный метод для удаления секций из расписания.
 
-        Args:
-            sections (list): Список секций для удаления
-        """
         # Удаляем из основного DataFrame с экзаменами
         self.exams_df = self.exams_df[~self.exams_df['Section'].isin(sections)]
 
@@ -611,12 +534,37 @@ class ExamScheduler:
         self.schedule_df = pd.read_excel(input_excel)
         logging.info("Расписание успешно загружено.")
 
-    def edit_schedule_entry(self, index, **kwargs):
-        logging.info(f"Редактирование записи расписания (индекс {index})")
-        for key, value in kwargs.items():
-            if key in self.schedule_df.columns:
-                self.schedule_df.at[index, key] = value
-        logging.info("Изменения внесены.")
+    def edit_schedule_entry(self, section, room=None, date=None, time_slot=None, proctor=None):
+
+        logging.info(f"Редактирование записи расписания для секции: {section}")
+
+        if self.schedule_df is None:
+            raise ValueError("Расписание не загружено.")
+
+        if section not in self.schedule_df['Section'].values:
+            raise ValueError(f"Секция {section} не найдена в расписании.")
+
+        index = self.schedule_df[self.schedule_df['Section'] == section].index[0]
+
+        if room is not None:
+            self.schedule_df.at[index, 'Room'] = room
+            logging.info(f"Аудитория изменена на: {room}")
+        if date is not None:
+            # Проверяем формат даты
+            try:
+                datetime.strptime(date, '%Y-%m-%d')  # Проверка формата даты
+                self.schedule_df.at[index, 'Date'] = date
+                logging.info(f"Дата изменена на: {date}")
+            except ValueError:
+                raise ValueError("Некорректный формат даты. Ожидается 'YYYY-MM-DD'.")
+        if time_slot is not None:
+            self.schedule_df.at[index, 'Time_Slot'] = time_slot
+            logging.info(f"Временной слот изменен на: {time_slot}")
+        if proctor is not None:
+            self.schedule_df.at[index, 'Proctor'] = proctor
+            logging.info(f"Проктор изменен на: {proctor}")
+
+        logging.info(f"Запись для секции {section} успешно изменена.")
 
     def save_schedule(self, output_excel):
         logging.info("Сохранение изменений расписания в файл.")
@@ -624,8 +572,9 @@ class ExamScheduler:
         logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
 
 
+
+
 if __name__ == "__main__":
-    # Инициализация планировщика с файлами данных
     scheduler = ExamScheduler(
         exams_file=r"C:\\Users\\User\\Downloads\\FakedNarxozData (2).xlsx",
         rooms_file=r"C:\\Users\\User\\Downloads\\auditoriums.xlsx",
