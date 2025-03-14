@@ -4,13 +4,13 @@ import traceback
 from flask import Flask, jsonify, send_file
 import logging
 from flask_cors import CORS
-from xx import ExamScheduler  # импортируем ваш класс из файла xx.py
+from xx import ExamScheduler
 import numpy as np
 import pandas as pd
 import os
-
-
 from flask import request
+
+
 def handle_nan_values(obj):
     if isinstance(obj, (float, np.float64, np.float32)) and (math.isnan(obj) or np.isnan(obj)):
         return None
@@ -31,31 +31,29 @@ CORS(app)
 current_scheduler = None
 
 
-@app.route('/api/generate-schedule', methods=['POST'])
-def generate_schedule():
+@app.route('/api/init', methods=['POST'])
+def handle_initialization():
     global current_scheduler
 
     try:
-        # Получаем файлы из запроса
+        # 1. Загрузка файлов
         exams_file = request.files['exams']
         rooms_file = request.files['rooms']
         faculties_file = request.files['faculties']
-
-        # Получаем параметры
         start_date = request.form['start_date']
         num_days = int(request.form.get('num_days', 14))
 
-        # Сохраняем файлы во временную директорию
+        # 2. Сохранение файлов
         with tempfile.TemporaryDirectory() as temp_dir:
-            exams_path = os.path.join(temp_dir, exams_file.filename)
-            rooms_path = os.path.join(temp_dir, rooms_file.filename)
-            faculties_path = os.path.join(temp_dir, faculties_file.filename)
+            exams_path = os.path.join(temp_dir, 'exams.xlsx')
+            rooms_path = os.path.join(temp_dir, 'rooms.xlsx')
+            faculties_path = os.path.join(temp_dir, 'faculties.xlsx')
 
             exams_file.save(exams_path)
             rooms_file.save(rooms_path)
             faculties_file.save(faculties_path)
 
-            # Инициализируем и запускаем планировщик
+            # 3. Инициализация планировщика
             current_scheduler = ExamScheduler(
                 exams_file=exams_path,
                 rooms_file=rooms_path,
@@ -63,23 +61,87 @@ def generate_schedule():
                 start_date=start_date,
                 num_days=num_days
             )
-            current_scheduler.run_scheduling_process()
 
+        # 4. Возвращаем данные для управления предметами
         return jsonify({
-            'status': 'success',
-            'message': 'Расписание успешно сгенерировано',
-            'stats': {
-                'total_exams': len(current_scheduler.exam_groups),
-                'scheduled': len(current_scheduler.schedule_df),
-                'failed': len(current_scheduler.exam_groups) - len(current_scheduler.schedule_df)
-            }
-        }), 200
+            'status': 'subject_management',
+            'subjects': current_scheduler.get_unique_subjects(),
+            'message': 'Управление предметами перед генерацией'
+        })
+
+    except Exception as e:
+        logging.error(f"Ошибка инициализации: {traceback.format_exc()}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Ошибка инициализации: {str(e)}'
+        }), 500
+
 
     except Exception as e:
         logging.error(f"Ошибка генерации: {str(e)}")
         return jsonify({
             'status': 'error',
             'message': f'Ошибка генерации расписания: {str(e)}'
+        }), 500
+
+
+@app.route('/api/manage', methods=['POST'])
+def handle_management():
+    global current_scheduler
+
+    try:
+        if not current_scheduler:
+            raise ValueError("Планировщик не инициализирован")
+
+        data = request.json
+        action = data['action']
+
+        # 5. Обработка действий пользователя
+        if action == 'get_subjects':
+            return jsonify({
+                'status': 'success',
+                'subjects': current_scheduler.get_unique_subjects()
+            })
+
+        elif action == 'delete_subject':
+            subject = data['subject']
+            current_scheduler._delete_sections(
+                current_scheduler.exam_groups[
+                    current_scheduler.exam_groups['Subject'] == subject
+                    ]['Section'].tolist()
+            )
+            return jsonify({
+                'status': 'success',
+                'message': f'Предмет {subject} удален',
+                'remaining_subjects': current_scheduler.get_unique_subjects()
+            })
+
+        elif action == 'delete_section':
+            section = data['section']
+            current_scheduler._delete_sections([section])
+            return jsonify({
+                'status': 'success',
+                'message': f'Секция {section} удалена',
+                'remaining_subjects': current_scheduler.get_unique_subjects()
+            })
+
+        elif action == 'generate':
+            # 6. Запуск генерации расписания
+            current_scheduler.create_schedule()
+            return jsonify({
+                'status': 'success',
+                'schedule': current_scheduler.schedule_df.to_dict('records'),
+                'stats': {
+                    'total': len(current_scheduler.exam_groups),
+                    'scheduled': len(current_scheduler.schedule_df)
+                }
+            })
+
+    except Exception as e:
+        logging.error(f"Ошибка управления: {traceback.format_exc()}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
         }), 500
 
 
@@ -109,19 +171,19 @@ def get_schedule_stats():
 
 @app.route('/schedule/student/<student_id>')
 def get_student_schedule(student_id):
-    student_schedule = scheduler.get_student_sections(student_id)
+    student_schedule = current_scheduler.get_student_sections(student_id)
     return jsonify(student_schedule.to_dict('records'))
 
 @app.route('/schedule/export')
 def export_schedule():
     output_file = "general_schedule.xlsx"
-    scheduler.export_schedule(output_file)
+    current_scheduler.export_schedule(output_file)
     return send_file(output_file, as_attachment=True)
 
 @app.route('/schedule/student/<student_id>/export')
 def export_student_schedule(student_id):
     output_file = f"student_{student_id}_schedule.xlsx"
-    scheduler.export_student_schedule_to_excel(student_id, output_file)
+    current_scheduler.export_student_schedule_to_excel(student_id, output_file)
     return send_file(output_file, as_attachment=True)
 
 def convert_numpy_types(obj):
@@ -138,7 +200,7 @@ def convert_numpy_types(obj):
 
 @app.route('/section/<section_id>')
 def get_section_info(section_id):
-    section_info = scheduler.get_section_info(section_id)
+    section_info = current_scheduler.get_section_info(section_id)
     # Преобразуем numpy типы в стандартные типы Python
     section_info = convert_numpy_types(section_info)
     return jsonify(section_info)  # Возвращаем словарь как JSON
@@ -146,14 +208,14 @@ def get_section_info(section_id):
 @app.route('/section/<section_id>/export')
 def export_section_info(section_id):
     output_file = f"section_{section_id}_info.xlsx"
-    section_info = scheduler.get_section_info(section_id)  # Получаем информацию о секции
-    scheduler.export_section_info_to_excel(section_info, output_file)  # Экспортируем в Excel
+    section_info = current_scheduler.get_section_info(section_id)  # Получаем информацию о секции
+    current_scheduler.export_section_info_to_excel(section_info, output_file)  # Экспортируем в Excel
     return send_file(output_file, as_attachment=True)  # Отправляем файл пользователю
 
 @app.route('/subjects', methods=['GET'])
 def get_subjects():
     try:
-        subjects = scheduler.get_unique_subjects()
+        subjects = current_scheduler.get_unique_subjects()
         return jsonify({
             'success': True,
             'subjects': subjects
@@ -167,7 +229,7 @@ def get_subjects():
 @app.route('/subjects/<subject>/groups', methods=['GET'])
 def get_subject_groups(subject):
     try:
-        subject_groups = scheduler.exam_groups[scheduler.exam_groups['Subject'] == subject]
+        subject_groups = current_scheduler.exam_groups[current_scheduler.exam_groups['Subject'] == subject]
 
         if subject_groups.empty:
             return jsonify({
@@ -194,7 +256,7 @@ def get_subject_groups(subject):
 @app.route('/subjects/<subject>/delete', methods=['DELETE'])
 def delete_subject(subject):
     try:
-        subject_groups = scheduler.exam_groups[scheduler.exam_groups['Subject'] == subject]
+        subject_groups = current_scheduler.exam_groups[current_scheduler.exam_groups['Subject'] == subject]
 
         if subject_groups.empty:
             return jsonify({
@@ -203,9 +265,9 @@ def delete_subject(subject):
             }), 404
 
         sections_to_delete = subject_groups['Section'].tolist()
-        scheduler._delete_sections(sections_to_delete)
+        current_scheduler._delete_sections(sections_to_delete)
 
-        scheduler.create_schedule()
+        current_scheduler.create_schedule()
 
         return jsonify({
             'success': True,
@@ -221,16 +283,16 @@ def delete_subject(subject):
 @app.route('/subjects/<subject>/sections/<section>', methods=['DELETE'])
 def delete_section(subject, section):
     try:
-        subject_groups = scheduler.exam_groups[scheduler.exam_groups['Subject'] == subject]
+        subject_groups = current_scheduler.exam_groups[current_scheduler.exam_groups['Subject'] == subject]
         if section not in subject_groups['Section'].values:
             return jsonify({
                 'success': False,
                 'error': f'Секция {section} не найдена для предмета {subject}'
             }), 404
 
-        scheduler._delete_sections([section])
+        current_scheduler._delete_sections([section])
 
-        scheduler.create_schedule()
+        current_scheduler.create_schedule()
 
         return jsonify({
             'success': True,
@@ -248,7 +310,7 @@ def get_available_rooms(day, time_slot):
 
     try:
         # Проверяем, существует ли расписание
-        if not hasattr(scheduler, 'room_availability'):
+        if not hasattr(current_scheduler, 'room_availability'):
             return jsonify({
                 'success': False,
                 'error': 'Расписание не создано. Сначала создайте расписание.'
@@ -256,7 +318,7 @@ def get_available_rooms(day, time_slot):
 
         logging.info(f"Logging time slot and day: {day}, {time_slot}")
 
-        available_rooms = scheduler.find_available_rooms(day, time_slot)
+        available_rooms = current_scheduler.find_available_rooms(day, time_slot)
 
         return jsonify({
             'success': True,
@@ -292,7 +354,7 @@ def edit_schedule(section):
                 'error': 'At least one field (room, date, time_slot, proctor) must be provided'
             }), 400
 
-        scheduler.edit_schedule_entry(
+        current_scheduler.edit_schedule_entry(
             section=section,
             room=data.get('room'),
             date=data.get('date'),
@@ -303,7 +365,7 @@ def edit_schedule(section):
         return jsonify({
             'success': True,
             'message': f'Запись для секции {section} успешно обновлена',
-            'updated_schedule': scheduler.schedule_df.to_dict('records')
+            'updated_schedule': current_scheduler.schedule_df.to_dict('records')
         })
     except Exception as e:
         logging.error(f"Ошибка при обработке запроса: {str(e)}")
@@ -325,19 +387,19 @@ def get_available_proctors(date, time_slot):
 
         logging.info(f"Запрос доступных прокторов: дата={date}, слот={time_slot}")
 
-        all_proctors = scheduler.get_all_proctors()
+        all_proctors = current_scheduler.get_all_proctors()
 
-        if scheduler.schedule_df is None or not {'Date', 'Time_Slot', 'Proctor'}.issubset(
-                scheduler.schedule_df.columns):
+        if current_scheduler.schedule_df is None or not {'Date', 'Time_Slot', 'Proctor'}.issubset(
+                current_scheduler.schedule_df.columns):
             return jsonify({'success': False, 'error': 'Данные расписания отсутствуют или некорректны'}), 500
 
-        scheduler.schedule_df['Date'] = scheduler.schedule_df['Date'].astype(str)
-        scheduler.schedule_df['Time_Slot'] = scheduler.schedule_df['Time_Slot'].astype(str)
+        current_scheduler.schedule_df['Date'] = current_scheduler.schedule_df['Date'].astype(str)
+        current_scheduler.schedule_df['Time_Slot'] = current_scheduler.schedule_df['Time_Slot'].astype(str)
 
         busy_proctors = set(
-            scheduler.schedule_df.loc[
-                (scheduler.schedule_df['Date'] == date) &
-                (scheduler.schedule_df['Time_Slot'] == time_slot),
+            current_scheduler.schedule_df.loc[
+                (current_scheduler.schedule_df['Date'] == date) &
+                (current_scheduler.schedule_df['Time_Slot'] == time_slot),
                 'Proctor'
             ].dropna()
         )
