@@ -8,8 +8,9 @@ from openpyxl import load_workbook
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ExamScheduler:
-    def __init__(self, exams_file, rooms_file,faculties_file, start_date=None, num_days=14):
+    def __init__(self, exams_file, rooms_file,faculties_file, start_date=None, num_days=14, title = "Сезон бе имени"):
         logging.info("Инициализация планировщика экзаменов.")
+        self.title = title
         self.exams_df = pd.read_excel(exams_file)
         self.rooms_df = pd.read_excel(rooms_file)
         self.faculties_df = pd.read_excel(faculties_file)
@@ -26,34 +27,7 @@ class ExamScheduler:
     def _prepare_data(self):
         logging.info("Подготовка данных для планирования.")
 
-        # Проверка и заполнение exams_df
-        if 'Section' not in self.exams_df.columns:
-            self.exams_df['Section'] = (
-                    self.exams_df['Subject'] + '-' +
-                    self.exams_df['EduProgram'] + '-' +
-                    self.exams_df['YearsOfStudy'].astype(str)
-            )
-        self.exams_df['Instructor'] = self.exams_df['Instructor'].fillna('Неизвестный преподаватель')
-        self.exams_df = self.exams_df.drop_duplicates(subset=['Section'])
-
-        # Проверка и заполнение rooms_df
-        if 'Вместительность аудитории' not in self.rooms_df.columns:
-            self.rooms_df['Вместительность аудитории'] = 30
-        self.rooms_df['Вместительность аудитории'] = pd.to_numeric(
-            self.rooms_df['Вместительность аудитории'],
-            errors='coerce'
-        ).fillna(30)
-        self.rooms_df = self.rooms_df.drop_duplicates(subset=['Аудитория'])
-
-        # Проверка и заполнение faculties_df
-        self.faculties_df['Faculty'] = self.faculties_df['Faculty'].fillna('Общий факультет')
-        missing_subjects = set(self.exams_df['Subject']) - set(self.faculties_df['Subject'])
-        if missing_subjects:
-            new_rows = [{'Subject': subject, 'Faculty': 'Общий факультет'} for subject in missing_subjects]
-            self.faculties_df = pd.concat([self.faculties_df, pd.DataFrame(new_rows)], ignore_index=True)
-
-        # Подготовка данных
-        self.exam_groups = self.exams_df.groupby(
+        self.exam_groups = self.exams_df.drop_duplicates(subset=['Section'], keep='first').groupby(
             ['Subject', 'Instructor', 'EduProgram', 'YearsOfStudy', 'Section']
         ).agg({'fake_id': 'count'}).reset_index()
 
@@ -593,55 +567,7 @@ class ExamScheduler:
         self.schedule_df.to_excel(output_excel, index=False)
         logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
 
-
-
-
-if __name__ == "__main__":
-    scheduler = ExamScheduler(
-        exams_file=r"C:\\Users\\User\\Downloads\\FakedNarxozData (2).xlsx",
-        rooms_file=r"C:\\Users\\User\\Downloads\\auditoriums.xlsx",
-        faculties_file=r"C:\Users\User\Documents\Faculties.xlsx",
-        start_date='2024-01-15',
-        num_days=14
-    )
-
-    # 1. Создание нового расписания
-    scheduler.create_schedule()
-    scheduler.export_schedule("general_schedule.xlsx")
-
-    # 2. Загрузка существующего расписания
-    scheduler.load_schedule("general_schedule.xlsx")
-
-    # 3. Поиск свободных аудиторий в определенный день и слот
-    day = "2024-01-16"
-    time_slot = "08:00-11:00"
-    available_rooms = scheduler.find_available_rooms(day, time_slot)
-
-    print(f"Свободные аудитории на {day} в слот {time_slot}:")
-    for room in available_rooms:
-        print(room)
-
-    # 4. Изменение конкретной записи в расписании (например, смена проктора)
-    scheduler.edit_schedule_entry(5, Proctor="Новый Проктор")
-
-    # 5. Изменение аудитории и временного слота для экзамена
-    scheduler.edit_schedule_entry(3, Аудитория="101", TimeSlot="11:30-14:30")
-
-    # 6. Сохранение обновленного расписания
-    scheduler.save_schedule("updated_schedule.xlsx")
-    #
-    # # Вывод расписания для конкретного студента в консоль
-    # student_id = "Student0001"
-    # scheduler.print_student_schedule(student_id)
-    #
-    # # Получение информации о секции
-    # section_id = "KRL 1104-34-Ch"
-    # section_info = scheduler.get_section_info(section_id)
-    #
-    # # Экспорт информации о секции в Excel
-    # output_section_file = "section_info.xlsx"
-    # scheduler.export_section_info_to_excel(section_info, output_section_file)
-    #
-    # # Экспорт расписания для конкретного студента в Excel
-    # output_student_file = "student_schedule.xlsx"
-    # scheduler.export_student_schedule_to_excel(student_id, output_student_file)
+    def load_from_session(self, session_data: dict):
+        """Загрузка расписания из сохраненной сессии"""
+        self.schedule_df = pd.DataFrame(session_data['schedule'])
+        self._prepare_data()
