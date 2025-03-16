@@ -1,6 +1,10 @@
+import json
 import tempfile
+import math, traceback
 from datetime import datetime
 import traceback
+from venv import logger
+
 from flask import Flask, jsonify, send_file
 import logging
 from flask_cors import CORS
@@ -9,8 +13,13 @@ import numpy as np
 import pandas as pd
 import os
 from flask import request
+from create_db import ExamSession, engine
+from sqlalchemy.orm import sessionmaker
 
 
+
+
+from flask_sqlalchemy import SQLAlchemy
 def handle_nan_values(obj):
     if isinstance(obj, (float, np.float64, np.float32)) and (math.isnan(obj) or np.isnan(obj)):
         return None
@@ -26,7 +35,6 @@ def handle_nan_values(obj):
 
 app = Flask(__name__)
 CORS(app)
-
 # Глобальная переменная для хранения планировщика
 current_scheduler = None
 
@@ -37,6 +45,7 @@ def handle_initialization():
 
     try:
         # 1. Загрузка файлов
+        title = request.form['title']
         exams_file = request.files['exams']
         rooms_file = request.files['rooms']
         faculties_file = request.files['faculties']
@@ -55,6 +64,7 @@ def handle_initialization():
 
             # 3. Инициализация планировщика
             current_scheduler = ExamScheduler(
+                title=title,
                 exams_file=exams_path,
                 rooms_file=rooms_path,
                 faculties_file=faculties_path,
@@ -76,15 +86,8 @@ def handle_initialization():
             'message': f'Ошибка инициализации: {str(e)}'
         }), 500
 
-
-    except Exception as e:
-        logging.error(f"Ошибка генерации: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Ошибка генерации расписания: {str(e)}'
-        }), 500
-
-
+Session = sessionmaker(bind=engine)
+session = Session()
 @app.route('/api/manage', methods=['POST'])
 def handle_management():
     global current_scheduler
@@ -96,7 +99,7 @@ def handle_management():
         data = request.json
         action = data['action']
 
-        # 5. Обработка действий пользователя
+        # Обработка различных действий
         if action == 'get_subjects':
             return jsonify({
                 'status': 'success',
@@ -105,11 +108,10 @@ def handle_management():
 
         elif action == 'delete_subject':
             subject = data['subject']
-            current_scheduler._delete_sections(
-                current_scheduler.exam_groups[
-                    current_scheduler.exam_groups['Subject'] == subject
-                    ]['Section'].tolist()
-            )
+            sections_to_delete = current_scheduler.exam_groups[
+                current_scheduler.exam_groups['Subject'] == subject
+            ]['Section'].tolist()
+            current_scheduler._delete_sections(sections_to_delete)
             return jsonify({
                 'status': 'success',
                 'message': f'Предмет {subject} удален',
@@ -125,12 +127,47 @@ def handle_management():
                 'remaining_subjects': current_scheduler.get_unique_subjects()
             })
 
+
         elif action == 'generate':
-            # 6. Запуск генерации расписания
+
+            # Generate the schedule
             current_scheduler.create_schedule()
+
+            # Create a new session for database operations
+            session = Session()
+            try:
+                # Deactivate all previous sessions
+                session.query(ExamSession).update({'is_active': False})
+
+                # Create a new exam session
+                new_session = ExamSession(
+                    title=current_scheduler.title,
+                    start_date=current_scheduler.start_date,
+                    # end_date=datetime.strptime(data['end_date'], '%Y-%m-%d').date(),
+                    schedule_data=json.dumps(handle_nan_values(current_scheduler.schedule_df)),
+                    days = current_scheduler.num_days,
+                    is_active= True
+                )
+                session.add(new_session)
+                session.commit()
+
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Database error: {traceback.format_exc()}")
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Database error: {str(e)}'
+                }), 500
+
+            finally:
+                # Close the session to release resources
+                session.close()
+
+            # Return the sanitized schedule
+            sanitized_schedule = handle_nan_values(current_scheduler.schedule_df)
             return jsonify({
                 'status': 'success',
-                'schedule': current_scheduler.schedule_df.to_dict('records'),
+                'schedule': sanitized_schedule,
                 'stats': {
                     'total': len(current_scheduler.exam_groups),
                     'scheduled': len(current_scheduler.schedule_df)
@@ -138,14 +175,97 @@ def handle_management():
             })
 
     except Exception as e:
-        logging.error(f"Ошибка управления: {traceback.format_exc()}")
+        logger.error(f"Management error: {traceback.format_exc()}")
         return jsonify({
             'status': 'error',
             'message': str(e)
         }), 500
 
+# Получить список сессий
+@app.route('/api/sessions', methods=['GET'])
+def get_all_sessions():
+    db_session = Session()
+    try:
+        sessions = db_session.query(ExamSession).all()
 
-# Модифицированные эндпоинты
+        sessions_data = [exam_session.to_dict() for exam_session in sessions]  # Используем exam_session.to_dict()
+        return jsonify(sessions_data),200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:session.close()
+
+
+# Получить детали конкретной сессии
+@app.route('/api/sessions/<int:session_id>', methods=['GET'])
+def get_session_details(session_id):
+    db_session = Session()
+    try:
+        session = db_session.query(ExamSession).get(session_id)
+        if session:
+            return jsonify(session.to_dict()), 200
+        else:
+            return jsonify({"error": "Session not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+
+from flask import jsonify
+import json
+
+# Глобальный объект планировщика
+
+@app.route('/api/sessions/<int:session_id>/activate', methods=['POST'])
+def activate_session(session_id):
+    db_session = Session()
+    try:
+        # Получаем сессию по ID
+        session = db_session.query(ExamSession).get(session_id)
+        if session is None:
+            return jsonify({"error": "Session not found"}), 404
+
+        # Деактивируем все сессии
+        db_session.query(ExamSession).update({"is_active": False})
+
+        # Активируем текущую сессию
+        session.is_active = True
+        db_session.commit()
+
+        # Проверяем, что current_scheduler инициализирован
+        if current_scheduler is None:
+            return jsonify({"error": "Scheduler is not initialized"}), 500
+
+        # Берём schedule_data из сессии и присваиваем его current_scheduler
+        if session.schedule_data:
+            try:
+                # Десериализуем JSON-строку в Python-объект
+                schedule_data = json.loads(session.schedule_data)
+                # Присваиваем данные планировщику
+                current_scheduler.schedule_data = schedule_data
+            except json.JSONDecodeError as e:
+                return jsonify({"error": f"Invalid schedule_data: {str(e)}"}), 400
+        else:
+            return jsonify({"error": "No schedule data found"}), 400
+
+        return jsonify(session.to_dict()), 200
+    except Exception as e:
+        db_session.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+# Удаление сессии
+@app.route('/api/sessions/<int:session_id>', methods=['DELETE'])
+def delete_session(session_id):
+    db = Session()
+    try:
+        session_obj = db.query(ExamSession).get(session_id)
+        db.delete(session_obj)
+        db.commit()
+        return jsonify({"message": "Сессия удалена"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/schedule')
 def get_schedule():
     if not current_scheduler:
@@ -169,10 +289,12 @@ def get_schedule_stats():
         'failed': total - scheduled
     })
 
+
 @app.route('/schedule/student/<student_id>')
 def get_student_schedule(student_id):
     student_schedule = current_scheduler.get_student_sections(student_id)
     return jsonify(student_schedule.to_dict('records'))
+
 
 @app.route('/schedule/export')
 def export_schedule():
@@ -180,11 +302,13 @@ def export_schedule():
     current_scheduler.export_schedule(output_file)
     return send_file(output_file, as_attachment=True)
 
+
 @app.route('/schedule/student/<student_id>/export')
 def export_student_schedule(student_id):
     output_file = f"student_{student_id}_schedule.xlsx"
     current_scheduler.export_student_schedule_to_excel(student_id, output_file)
     return send_file(output_file, as_attachment=True)
+
 
 def convert_numpy_types(obj):
     if isinstance(obj, (np.int64, np.int32)):
@@ -198,6 +322,7 @@ def convert_numpy_types(obj):
     else:
         return obj
 
+
 @app.route('/section/<section_id>')
 def get_section_info(section_id):
     section_info = current_scheduler.get_section_info(section_id)
@@ -205,12 +330,14 @@ def get_section_info(section_id):
     section_info = convert_numpy_types(section_info)
     return jsonify(section_info)  # Возвращаем словарь как JSON
 
+
 @app.route('/section/<section_id>/export')
 def export_section_info(section_id):
     output_file = f"section_{section_id}_info.xlsx"
     section_info = current_scheduler.get_section_info(section_id)  # Получаем информацию о секции
     current_scheduler.export_section_info_to_excel(section_info, output_file)  # Экспортируем в Excel
     return send_file(output_file, as_attachment=True)  # Отправляем файл пользователю
+
 
 @app.route('/subjects', methods=['GET'])
 def get_subjects():
@@ -225,6 +352,7 @@ def get_subjects():
             'success': False,
             'error': str(e)
         }), 500
+
 
 @app.route('/subjects/<subject>/groups', methods=['GET'])
 def get_subject_groups(subject):
@@ -253,6 +381,7 @@ def get_subject_groups(subject):
             'error': str(e)
         }), 500
 
+
 @app.route('/subjects/<subject>/delete', methods=['DELETE'])
 def delete_subject(subject):
     try:
@@ -280,6 +409,7 @@ def delete_subject(subject):
             'error': str(e)
         }), 500
 
+
 @app.route('/subjects/<subject>/sections/<section>', methods=['DELETE'])
 def delete_section(subject, section):
     try:
@@ -305,9 +435,9 @@ def delete_section(subject, section):
             'error': str(e)
         }), 500
 
+
 @app.route('/available-rooms/<day>/<time_slot>', methods=['GET'])
 def get_available_rooms(day, time_slot):
-
     try:
         # Проверяем, существует ли расписание
         if not hasattr(current_scheduler, 'room_availability'):
@@ -331,7 +461,6 @@ def get_available_rooms(day, time_slot):
             'success': False,
             'error': str(e)
         }), 500
-
 
 
 @app.route('/schedule/edit/<string:section>', methods=['POST'])
@@ -375,8 +504,6 @@ def edit_schedule(section):
         }), 500
 
 
-
-
 @app.route('/available-proctors/<string:date>/<path:time_slot>', methods=['GET'])
 def get_available_proctors(date, time_slot):
     try:
@@ -415,6 +542,8 @@ def get_available_proctors(date, time_slot):
     except Exception as e:
         logging.error(f"Ошибка в get_available_proctors: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Внутренняя ошибка сервера'}), 500
+
+
 
 
 if __name__ == '__main__':
