@@ -82,6 +82,7 @@ def handle_initialization():
         return jsonify({
             'status': 'subject_management',
             'subjects': current_scheduler.get_unique_subjects(),
+            'dates': current_scheduler.get_current_dates(),
             'message': 'Управление предметами перед генерацией'
         })
 

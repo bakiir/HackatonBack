@@ -6,9 +6,7 @@
   <component name="ChangeListManager">
     <list default="true" id="5cf38b68-54d8-4863-8b3c-2bffadc51ffd" name="Changes" comment="Add: history of generations &#10;     database os seasons&#10;     manipulating with history(just getAll &amp; geById &amp; delete)&#10;&#10;Todo:activating prev seasons for seeing and using it like current season">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jwt_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/jwt_service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xx.py" beforeDir="false" afterPath="$PROJECT_DIR$/xx.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/exam_sessions.db" beforeDir="false" afterPath="$PROJECT_DIR$/exam_sessions.db" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -355,7 +353,8 @@
       <workItem from="1742159161740" duration="7695000" />
       <workItem from="1742186328832" duration="1092000" />
       <workItem from="1742194439331" duration="2315000" />
-      <workItem from="1742208463553" duration="1752000" />
+      <workItem from="1742208463553" duration="2106000" />
+      <workItem from="1742210896421" duration="412000" />
     </task>
     <task id="LOCAL-00001" summary="первый коммит">
       <option name="closed" value="true" />
@@ -428,7 +427,7 @@
     <SUITE FILE_PATH="coverage/pythonProject1$test.coverage" NAME="test Coverage Results" MODIFIED="1742148004588" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pythonProject1$claudeHtml.coverage" NAME="claudeHtml Coverage Results" MODIFIED="1742151642570" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pythonProject1$activate_this.coverage" NAME="activate_this Coverage Results" MODIFIED="1726051670817" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/.venv/Scripts" />
-    <SUITE FILE_PATH="coverage/pythonProject1$pythonProject1.coverage" NAME="pythonProject1 Coverage Results" MODIFIED="1742210018245" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/pythonProject1$pythonProject1.coverage" NAME="pythonProject1 Coverage Results" MODIFIED="1742210903919" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
     <SUITE FILE_PATH="coverage/pythonProject1$geneticVersion.coverage" NAME="geneticVersion Coverage Results" MODIFIED="1736516023558" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pythonProject1$xxSection.coverage" NAME="xxSection Coverage Results" MODIFIED="1737025822264" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pythonProject1$greedyVersion.coverage" NAME="greedyVersion Coverage Results" MODIFIED="1736516518385" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
