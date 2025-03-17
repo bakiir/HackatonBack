@@ -1,20 +1,13 @@
 import random
-import this
-from sched import scheduler
-
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
-
-from numpy.ma.core import sctype
-from openpyxl import load_workbook
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ExamScheduler:
-    def __init__(self, exams_file, rooms_file,faculties_file, start_date, num_days=14, title = "Сезон беp имени", schedule_data=None):
-
+    def __init__(self, exams_file, rooms_file, faculties_file, start_date, num_days=14, title="Сезон беp имени", schedule_data=None):
         logging.info("Инициализация планировщика экзаменов.")
         self.schedule_data = schedule_data
         self.title = title
@@ -22,18 +15,21 @@ class ExamScheduler:
         self.rooms_df = pd.read_excel(rooms_file)
         self.faculties_df = pd.read_excel(faculties_file)
 
-        self.start_date = datetime.strptime(start_date, '%Y-%m-%d') if start_date else datetime.now()
-        self.num_days = num_days
+
+        # Инициализация дат
+        self.original_start_date = datetime.strptime(start_date, '%Y-%m-%d') if start_date else datetime.now()
+        self.original_num_days = num_days
+        self.custom_dates = self._generate_initial_dates()  # Инициализация списка дат
+
         self.schedule_df = None
-
         self.time_slots = ["08:00-11:00", "11:30-14:30", "15:00-18:00"]
-        self.days = [self.start_date + timedelta(days=i) for i in range(self.num_days)]
-
         self._prepare_data()
 
     def sched(self, data):
         self.schedule_df = data
         logging.info("Данные расписания обновлены.")
+
+
 
 
     def _prepare_data(self):
@@ -55,12 +51,52 @@ class ExamScheduler:
 
         self.faculty_proctors = self.faculties_df.groupby('Faculty')['Instructor'].apply(list).to_dict()
 
-        total_slots = len(self.rooms) * len(self.time_slots) * self.num_days
+        total_slots = len(self.rooms) * len(self.time_slots) * self.original_num_days
         logging.info(f"Всего экзаменов: {len(self.exam_groups)}")
         logging.info(f"Всего временных слотов: {total_slots}")
 
+    def _generate_initial_dates(self):
+        """Генерирует начальный список дат"""
+        return [
+            self.original_start_date + timedelta(days=i)
+            for i in range(self.original_num_days)
+        ]
 
+    def get_current_dates(self):
+        """Возвращает текущий список дат в формате строк"""
+        return [d.strftime('%Y-%m-%d') for d in self.custom_dates]
 
+    def remove_date(self, date_str):
+        """Удаляет дату и добавляет новую в конец"""
+        # Проверяем валидность даты
+        try:
+            date_to_remove = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            raise ValueError("Некорректный формат даты. Используйте YYYY-MM-DD")
+
+        # Удаляем дату из списка
+        if date_to_remove in self.custom_dates:
+            self.custom_dates.remove(date_to_remove)
+
+            # Добавляем новую дату в конец
+            last_date = self.custom_dates[-1] if self.custom_dates else self.original_start_date
+            new_date = last_date + timedelta(days=1)
+            self.custom_dates.append(new_date)
+        else:
+            raise ValueError("Указанная дата не найдена в расписании")
+
+    def add_custom_date(self, date_str):
+        """Добавляет произвольную дату в список"""
+        try:
+            new_date = datetime.strptime(date_str, '%Y-%m-%d')
+            if new_date not in self.custom_dates:
+                self.custom_dates.append(new_date)
+        except ValueError:
+            raise ValueError("Некорректный формат даты. Используйте YYYY-MM-DD")
+
+    def restore_default_dates(self):
+        """Восстанавливает исходные даты"""
+        self.custom_dates = self._generate_initial_dates()
 
     def manage_subjects_before_scheduling(self):
 
@@ -168,7 +204,7 @@ class ExamScheduler:
 
         self.room_availability = {
             day: {slot: set() for slot in self.time_slots}
-            for day in self.days
+            for day in self.custom_dates
         }
 
         sections_df = self.exam_groups.copy()
@@ -193,7 +229,7 @@ class ExamScheduler:
 
             best_slots = []
 
-            for day in self.days:
+            for day in self.custom_dates:
                 exam_date = day.strftime('%Y-%m-%d')
 
                 time_slots = list(self.time_slots)
@@ -261,12 +297,12 @@ class ExamScheduler:
 
         schedule.sort(key=lambda x: (x['Date'], x['Time_Slot']))
 
-        slot_usage = {day: {slot: 0 for slot in self.time_slots} for day in self.days}
+        slot_usage = {day: {slot: 0 for slot in self.time_slots} for day in self.custom_dates}
         for exam in schedule:
             day = datetime.strptime(exam['Date'], '%Y-%m-%d')
             slot_usage[day][exam['Time_Slot']] += 1
 
-        for day in self.days:
+        for day in self.custom_dates:
             total_slots = len(self.time_slots)
             used_slots = sum(1 for slot in self.time_slots if slot_usage[day][slot] > 0)
             logging.info(f"День {day.strftime('%Y-%m-%d')}: использовано {used_slots} из {total_slots} слотов")
@@ -275,7 +311,7 @@ class ExamScheduler:
 
         logging.info("Общая статистика использования слотов:")
         for slot in self.time_slots:
-            total = sum(slot_usage[day][slot] for day in self.days)
+            total = sum(slot_usage[day][slot] for day in self.custom_dates)
             logging.info(f"  Слот {slot}: {total} экзаменов")
 
         total_sections = len(sections)

@@ -9,7 +9,7 @@ from venv import logger
 import bcrypt
 
 from users_db import User
-from flask import Flask, jsonify, send_file
+from flask import Flask, jsonify, send_file, flash, redirect, url_for
 import logging
 from flask_cors import CORS
 from xx import ExamScheduler
@@ -51,7 +51,7 @@ def handle_initialization():
 
     try:
         # 1. Загрузка файлов
-        title = request.form['title']
+        title = request.form.get('title', 'Сезон без имени')
         exams_file = request.files['exams']
         rooms_file = request.files['rooms']
         faculties_file = request.files['faculties']
@@ -91,6 +91,76 @@ def handle_initialization():
             'status': 'error',
             'message': f'Ошибка инициализации: {str(e)}'
         }), 500
+
+
+
+@app.route('/api/manage_dates', methods=['POST'])
+def manage_dates():
+    global current_scheduler
+
+    # Проверка инициализации планировщика
+    if current_scheduler is None:
+        return jsonify({
+            'status': 'error',
+            'message': 'Планировщик не инициализирован'
+        }), 400
+
+    try:
+        action = request.json.get('action')
+        if action not in ['remove', 'add_custom', 'restore']:
+            return jsonify({
+                'status': 'error',
+                'message': 'Некорректное действие'
+            }), 400
+
+        if action == 'remove':
+            date_to_remove = request.json.get('date')
+            if not date_to_remove:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Не указана дата для удаления'
+                }), 400
+
+            current_scheduler.remove_date(date_to_remove)
+            logging.info(f'Дата {date_to_remove} удалена')
+            return jsonify({
+                'status': 'success',
+                'message': f'Дата {date_to_remove} удалена',
+                'dates': current_scheduler.get_current_dates()
+            })
+
+        elif action == 'add_custom':
+            custom_date = request.json.get('custom_date')
+            if not custom_date:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Не указана дата для добавления'
+                }), 400
+
+            current_scheduler.add_custom_date(custom_date)
+            logging.info(f'Дата {custom_date} добавлена')
+            return jsonify({
+                'status': 'success',
+                'message': f'Дата {custom_date} добавлена',
+                'dates': current_scheduler.get_current_dates()
+            })
+
+        elif action == 'restore':
+            current_scheduler.restore_default_dates()
+            logging.info('Исходные даты восстановлены')
+            return jsonify({
+                'status': 'success',
+                'message': 'Исходные даты восстановлены',
+                'dates': current_scheduler.get_current_dates()
+            })
+
+    except Exception as e:
+        logging.error(f"Ошибка управления датами: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Ошибка управления датами: {str(e)}'
+        }), 500
+
 
 Session = sessionmaker(bind=engine)
 session = Session()
@@ -133,6 +203,9 @@ def handle_management():
                 'remaining_subjects': current_scheduler.get_unique_subjects()
             })
 
+        # elif action == 'manage_date':
+        #     current_scheduler.schedule_df['Date'] = data['date']
+
 
         elif action == 'generate':
 
@@ -148,10 +221,10 @@ def handle_management():
                 # Create a new exam session
                 new_session = ExamSession(
                     title=current_scheduler.title,
-                    start_date=current_scheduler.start_date,
+                    start_date=current_scheduler.original_start_date,
                     # end_date=datetime.strptime(data['end_date'], '%Y-%m-%d').date(),
                     schedule_data=json.dumps(handle_nan_values(current_scheduler.schedule_df)),
-                    days = current_scheduler.num_days,
+                    days = current_scheduler.original_num_days,
                     is_active= True
                 )
                 session.add(new_session)
@@ -557,7 +630,7 @@ def protected():
         if token.startswith("Bearer "):
             token = token.split(" ")[1]
 
-        payload = jwt.decode_access_token(token)
+        payload = jwt_service.decode_access_token(token)
         if not payload:
             return jsonify({"error": "Неверный токен"}), 401
 

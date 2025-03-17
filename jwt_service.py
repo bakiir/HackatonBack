@@ -1,6 +1,6 @@
 import bcrypt
 
-import jwt
+import jwt  
 
 from datetime import datetime, timedelta
 
