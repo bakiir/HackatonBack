@@ -4,7 +4,7 @@ from datetime import datetime
 import json
 
 # Создание соединения с базой данных
-engine = create_engine("sqlite:///exam_sessions.db", echo=True)
+engine = create_engine("sqlite:///exam_sessions.db", echo=False)
 
 Base = declarative_base()
 

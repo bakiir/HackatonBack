@@ -1,15 +1,22 @@
 import random
+import this
+from sched import scheduler
+
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
+
+from numpy.ma.core import sctype
 from openpyxl import load_workbook
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ExamScheduler:
-    def __init__(self, exams_file, rooms_file,faculties_file, start_date=None, num_days=14, title = "Сезон бе имени"):
+    def __init__(self, exams_file, rooms_file,faculties_file, start_date, num_days=14, title = "Сезон беp имени", schedule_data=None):
+
         logging.info("Инициализация планировщика экзаменов.")
+        self.schedule_data = schedule_data
         self.title = title
         self.exams_df = pd.read_excel(exams_file)
         self.rooms_df = pd.read_excel(rooms_file)
@@ -23,6 +30,11 @@ class ExamScheduler:
         self.days = [self.start_date + timedelta(days=i) for i in range(self.num_days)]
 
         self._prepare_data()
+
+    def sched(self, data):
+        self.schedule_df = data
+        logging.info("Данные расписания обновлены.")
+
 
     def _prepare_data(self):
         logging.info("Подготовка данных для планирования.")

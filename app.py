@@ -3,17 +3,23 @@ import tempfile
 import math, traceback
 from datetime import datetime
 import traceback
+from typing import final
 from venv import logger
 
+import bcrypt
+
+from users_db import User
 from flask import Flask, jsonify, send_file
 import logging
 from flask_cors import CORS
 from xx import ExamScheduler
 import numpy as np
 import pandas as pd
-import os
+import os, jwt_service
 from flask import request
 from create_db import ExamSession, engine
+# from users_db import User, engine
+import users_db
 from sqlalchemy.orm import sessionmaker
 
 
@@ -215,45 +221,39 @@ import json
 
 # Глобальный объект планировщика
 
+
+
 @app.route('/api/sessions/<int:session_id>/activate', methods=['POST'])
 def activate_session(session_id):
     db_session = Session()
     try:
-        # Получаем сессию по ID
         session = db_session.query(ExamSession).get(session_id)
-        if session is None:
+        if not session:
             return jsonify({"error": "Session not found"}), 404
 
         # Деактивируем все сессии
         db_session.query(ExamSession).update({"is_active": False})
-
-        # Активируем текущую сессию
         session.is_active = True
         db_session.commit()
 
-        # Проверяем, что current_scheduler инициализирован
-        if current_scheduler is None:
-            return jsonify({"error": "Scheduler is not initialized"}), 500
-
-        # Берём schedule_data из сессии и присваиваем его current_scheduler
         if session.schedule_data:
             try:
-                # Десериализуем JSON-строку в Python-объект
                 schedule_data = json.loads(session.schedule_data)
-                # Присваиваем данные планировщику
-                current_scheduler.schedule_data = schedule_data
+                current_scheduler.sched(schedule_data)  # Обновляем данные
+                return jsonify(session.to_dict()), 200
             except json.JSONDecodeError as e:
-                return jsonify({"error": f"Invalid schedule_data: {str(e)}"}), 400
+                return jsonify({"error": f"Invalid schedule_data: {e}"}), 400
         else:
             return jsonify({"error": "No schedule data found"}), 400
 
-        return jsonify(session.to_dict()), 200
     except Exception as e:
         db_session.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         db_session.close()
-# Удаление сессии
+
+
+
 @app.route('/api/sessions/<int:session_id>', methods=['DELETE'])
 def delete_session(session_id):
     db = Session()
@@ -542,6 +542,80 @@ def get_available_proctors(date, time_slot):
     except Exception as e:
         logging.error(f"Ошибка в get_available_proctors: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Внутренняя ошибка сервера'}), 500
+
+# only for testing
+@app.route('/api/protected', methods=['GET'])
+def protected():
+        """
+        Защищённый эндпоинт, доступный только с валидным JWT-токеном.
+        """
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"error": "Токен отсутствует"}), 401
+
+        # Убираем префикс "Bearer " из токена
+        if token.startswith("Bearer "):
+            token = token.split(" ")[1]
+
+        payload = jwt.decode_access_token(token)
+        if not payload:
+            return jsonify({"error": "Неверный токен"}), 401
+
+        user_id = payload.get("sub")
+        role = payload.get("role")
+        return jsonify({"message": f"Доступ разрешён для пользователя {user_id} с ролью {role}"}), 200
+
+@app.route('/api/register', methods=['POST'])
+def register():
+    """
+    Регистрация нового пользователя.
+    """
+    data = request.get_json()  # Получаем данные из запроса
+    if not data or 'email' not in data or 'password' not in data:
+        return jsonify({"error": "Email and password are required"}), 400
+
+    email = data['email']
+    password = data['password']
+    role = data.get('role', 'student')  # По умолчанию роль 'student'
+
+    session = Session()
+    try:
+        # Регистрируем пользователя
+        user = User.register_user(session, email, password, role)
+        return jsonify({
+            "message": "User registered successfully",
+            "user": user.to_dict()
+        }), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": "An internal error occurred"}), 500
+    finally:
+        session.close()
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    user_session = Session()
+    try:
+        data = request.json
+        email = data.get("email")
+        password = data.get("password")
+
+        # Проверка наличия email и password
+        if not email or not password:
+            return jsonify({"error": "Email и пароль обязательны"}), 400
+
+        # Используем метод login_user вместо дублирования кода
+        result = User.login_user(user_session, email, password)
+        if not result:
+            return jsonify({"error": "Неверные учетные данные"}), 401
+
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        user_session.close()
+
 
 
 
