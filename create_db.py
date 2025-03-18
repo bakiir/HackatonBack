@@ -3,6 +3,8 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import json
 
+from xx import ExamScheduler
+
 # Создание соединения с базой данных
 engine = create_engine("sqlite:///exam_sessions.db", echo=False)
 

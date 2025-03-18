@@ -1,3 +1,4 @@
+import json
 import random
 import pandas as pd
 from datetime import datetime, timedelta
@@ -6,31 +7,71 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+
+
 class ExamScheduler:
-    def __init__(self, exams_file, rooms_file, faculties_file, start_date, num_days=14, title="Сезон беp имени", schedule_data=None):
+    def __init__(self, exams_file=None, rooms_file=None, faculties_file=None, start_date=None, num_days=14, title="Сезон беp имени", schedule_data=None, session_data=None):
         logging.info("Инициализация планировщика экзаменов.")
         self.schedule_data = schedule_data
         self.title = title
-        self.exams_df = pd.read_excel(exams_file)
-        self.rooms_df = pd.read_excel(rooms_file)
-        self.faculties_df = pd.read_excel(faculties_file)
-
-
-        # Инициализация дат
-        self.original_start_date = datetime.strptime(start_date, '%Y-%m-%d') if start_date else datetime.now()
-        self.original_num_days = num_days
-        self.custom_dates = self._generate_initial_dates()  # Инициализация списка дат
-
-        self.schedule_df = None
         self.time_slots = ["08:00-11:00", "11:30-14:30", "15:00-18:00"]
-        self._prepare_data()
+        self.schedule_df = None
+
+        # Если переданы данные сессии, загружаем их
+        if session_data:
+            self._load_from_session(session_data)
+        else:
+            # Загрузка данных из файлов (если они предоставлены)
+            if exams_file:
+                self.exams_df = pd.read_excel(exams_file)
+            else:
+                self.exams_df = pd.DataFrame()  # Пустой DataFrame, если файл не предоставлен
+
+            if rooms_file:
+                self.rooms_df = pd.read_excel(rooms_file)
+            else:
+                self.rooms_df = pd.DataFrame()  # Пустой DataFrame, если файл не предоставлен
+
+            if faculties_file:
+                self.faculties_df = pd.read_excel(faculties_file)
+            else:
+                self.faculties_df = pd.DataFrame()  # Пустой DataFrame, если файл не предоставлен
+
+            # Инициализация дат
+            self.original_start_date = datetime.strptime(start_date, '%Y-%m-%d') if start_date else datetime.now()
+            self.original_num_days = num_days
+            self.custom_dates = self._generate_initial_dates()  # Инициализация списка дат
+
+            # Подготовка данных
+            self._prepare_data()
+
+    def _load_from_session(self, session_data):
+        """Загрузка данных из активированной сессии"""
+        self.title = session_data.title
+        self.start_date = session_data.start_date
+        self.num_days = session_data.days
+        self.custom_dates = [self.start_date + timedelta(days=i) for i in range(self.num_days)]
+
+        # Если есть данные расписания
+        if session_data.schedule_data:
+            self.schedule_df = pd.DataFrame(json.loads(session_data.schedule_data))
+            self._derive_metadata()
+
+    def _derive_metadata(self):
+        """Извлечение метаданных из существующего расписания"""
+        if not self.schedule_df.empty:
+            self.exam_groups = self.schedule_df.groupby(
+                ['Subject', 'Instructor', 'EduProgram', 'Section']
+            ).size().reset_index(name='counts')
+
+            self.rooms = self.schedule_df['Room'].unique().tolist()
+            self.room_capacities = self.schedule_df.groupby('Room')['Students_Count'].max().to_dict()
 
     def sched(self, data):
+        """Обновление расписания с перерасчетом метаданных"""
         self.schedule_df = data
+        self._derive_metadata()
         logging.info("Данные расписания обновлены.")
-
-
-
 
     def _prepare_data(self):
         logging.info("Подготовка данных для планирования.")

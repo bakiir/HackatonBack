@@ -3,8 +3,11 @@ import tempfile
 import math, traceback
 from datetime import datetime
 import traceback
+from time import strptime
 from typing import final
 from venv import logger
+from flask import jsonify
+import json
 
 import bcrypt
 
@@ -92,7 +95,6 @@ def handle_initialization():
             'status': 'error',
             'message': f'Ошибка инициализации: {str(e)}'
         }), 500
-
 
 
 @app.route('/api/manage_dates', methods=['POST'])
@@ -290,43 +292,38 @@ def get_session_details(session_id):
     finally:
         db_session.close()
 
-from flask import jsonify
-import json
-
-# Глобальный объект планировщика
-
-
 
 @app.route('/api/sessions/<int:session_id>/activate', methods=['POST'])
 def activate_session(session_id):
     db_session = Session()
+    global current_scheduler
+
     try:
+        # Получаем сессию по ID
         session = db_session.query(ExamSession).get(session_id)
         if not session:
             return jsonify({"error": "Session not found"}), 404
 
         # Деактивируем все сессии
         db_session.query(ExamSession).update({"is_active": False})
+
+        # Активируем выбранную сессию
         session.is_active = True
         db_session.commit()
 
-        if session.schedule_data:
-            try:
-                schedule_data = json.loads(session.schedule_data)
-                current_scheduler.sched(schedule_data)  # Обновляем данные
-                return jsonify(session.to_dict()), 200
-            except json.JSONDecodeError as e:
-                return jsonify({"error": f"Invalid schedule_data: {e}"}), 400
-        else:
-            return jsonify({"error": "No schedule data found"}), 400
+        # Инициализация планировщика данными из сессии
+        current_scheduler = ExamScheduler(session_data=session)
+
+        return jsonify({
+            "status": "success",
+            "session": session.to_dict()
+        }), 200
 
     except Exception as e:
         db_session.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         db_session.close()
-
-
 
 @app.route('/api/sessions/<int:session_id>', methods=['DELETE'])
 def delete_session(session_id):
