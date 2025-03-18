@@ -1,18 +1,11 @@
-import json
 import tempfile
-import math, traceback
+import math
 from datetime import datetime
 import traceback
-from time import strptime
-from typing import final
 from venv import logger
-from flask import jsonify
 import json
-
-import bcrypt
-
 from users_db import User
-from flask import Flask, jsonify, send_file, flash, redirect, url_for
+from flask import Flask, jsonify, send_file
 import logging
 from flask_cors import CORS
 from xx import ExamScheduler
@@ -21,8 +14,6 @@ import pandas as pd
 import os, jwt_service
 from flask import request
 from create_db import ExamSession, engine
-# from users_db import User, engine
-import users_db
 from sqlalchemy.orm import sessionmaker
 
 
@@ -270,11 +261,42 @@ def get_all_sessions():
     try:
         sessions = db_session.query(ExamSession).all()
 
-        sessions_data = [exam_session.to_dict() for exam_session in sessions]  # Используем exam_session.to_dict()
-        return jsonify(sessions_data),200
+        sessions_data = [
+            {
+                'title': exam_session.title,
+                'start_date': exam_session.start_date,
+                'days': exam_session.days,
+                'created_at': exam_session.created_at,
+
+            }
+            for exam_session in sessions
+        ]
+
+        return jsonify(sessions_data), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    finally:session.close()
+
+    finally:
+        db_session.close()
+
+
+@app.route('/api/sessions/<int:session_id>/data', methods=['GET'])
+def get_data_by_id(session_id):
+    db_session = Session()
+    try:
+        data = db_session.query(ExamSession).get(session_id)
+        data = data.to_dict()
+        if(data):
+            return jsonify(data), 200
+        else:
+            return jsonify({"error": "Session not found"}), 404
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        db_session.close()
 
 
 # Получить детали конкретной сессии
