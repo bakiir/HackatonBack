@@ -784,5 +784,86 @@ def update_proctor_status():
         }), 500
 
 
+@app.route('/api/update_exam_durations', methods=['POST'])
+def update_exam_durations():
+    global current_scheduler
+    try:
+        # Проверяем, инициализирован ли планировщик
+        if not current_scheduler:
+            return jsonify({
+                'status': 'error',
+                'message': 'Планировщик не инициализирован'
+            }), 400
+
+        # Получаем данные от фронта
+        data = request.json
+        if not data or 'exams' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Не предоставлены данные об экзаменах'
+            }), 400
+
+        # Валидация входных данных
+        required_fields = ['section_id', 'duration']
+        for exam in data['exams']:
+            # Проверяем наличие всех обязательных полей
+            if not all(field in exam for field in required_fields):
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Неполные данные для экзамена: {exam}'
+                }), 400
+
+            # Проверяем допустимость длительности
+            if exam['duration'] not in current_scheduler.allowed_durations:
+                return jsonify({
+                    'status': 'error',
+                    'message': f"Недопустимая длительность {exam['duration']} для секции {exam['section_id']}"
+                }), 400
+
+        # Обновляем длительность для каждого экзамена
+        failed_updates = []
+        for exam in data['exams']:
+            section_id = exam['section_id']
+            duration = exam['duration']
+
+            try:
+                # Проверяем, существует ли секция
+                if section_id not in current_scheduler.exam_groups['Section'].values:
+                    failed_updates.append({
+                        'section_id': section_id,
+                        'error': 'Секция не найдена'
+                    })
+                    continue
+
+                # Обновляем длительность
+                current_scheduler.exam_groups.loc[
+                    current_scheduler.exam_groups['Section'] == section_id, 'Duration'
+                ] = duration
+
+            except Exception as e:
+                failed_updates.append({
+                    'section_id': section_id,
+                    'error': str(e)
+                })
+
+        if failed_updates:
+            return jsonify({
+                'status': 'partial_success',
+                'message': 'Некоторые длительности не обновлены',
+                'failed_updates': failed_updates
+            }), 207  # Multi-Status
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Длительности экзаменов успешно обновлены'
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении длительности экзаменов: {traceback.format_exc()}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Ошибка при обновлении длительности экзаменов: {str(e)}'
+        }), 500
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
