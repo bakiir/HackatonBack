@@ -33,6 +33,9 @@ class ExamScheduler:
 
         self.exam_groups = pd.read_excel(exams_file) if exams_file else pd.DataFrame()
 
+        if 'proctor_needed' not in self.exam_groups.columns:
+            self.exam_groups['proctor_needed'] = False
+
         # Добавляем поле has_exam, если его нет
         if 'has_exam' not in self.exam_groups.columns:
             self.exam_groups['has_exam'] = True
@@ -150,6 +153,9 @@ class ExamScheduler:
             ['Subject', 'Instructor', 'EduProgram', 'YearsOfStudy', 'Section']
         ).agg({'fake_id': 'count'}).reset_index()
 
+        if 'proctor_needed' not in self.exam_groups.columns:
+            self.exam_groups['proctor_needed'] = True
+
         # Добавляем колонку Duration (по умолчанию 180 минут)
         self.exam_groups["Duration"] = 180
         self.exam_groups["Proctor_Needed"] = False  # По умолчанию проктор не требуется
@@ -263,35 +269,37 @@ class ExamScheduler:
 
         return student_schedule
 
-
-
     def assign_proctors(self):
         logging.info("Назначение прокторов.")
         assigned_proctors = []
 
         for _, row in self.schedule_df.iterrows():
-            subject = row['Subject']
-            exam_faculty = list(self.subject_faculty_map.get(subject, []))
+            if 'proctor_needed' not in row or row['proctor_needed']:
+                # Если проктор нужен (по умолчанию True), назначаем проктора
+                subject = row['Subject']
+                exam_faculty = list(self.subject_faculty_map.get(subject, []))
 
-            if not exam_faculty:
-                assigned_proctors.append(None)
-                continue
+                if not exam_faculty:
+                    assigned_proctors.append(None)
+                    continue
 
-            exam_faculty = exam_faculty[0]
+                exam_faculty = exam_faculty[0]
 
-            if exam_faculty == 'ШЦТ':
-                possible_proctors = self.faculty_proctors.get('ШЦТ', [])
+                if exam_faculty == 'ШЦТ':
+                    possible_proctors = self.faculty_proctors.get('ШЦТ', [])
+                else:
+                    possible_proctors = [
+                        instr for fac, instrs in self.faculty_proctors.items()
+                        if fac not in (exam_faculty, 'ШЦТ') for instr in instrs
+                    ]
+
+                assigned_proctors.append(random.choice(possible_proctors) if possible_proctors else None)
             else:
-                possible_proctors = [
-                    instr for fac, instrs in self.faculty_proctors.items()
-                    if fac not in (exam_faculty, 'ШЦТ') for instr in instrs
-                ]
-
-            assigned_proctors.append(random.choice(possible_proctors) if possible_proctors else None)
+                # Если проктор не нужен, оставляем None
+                assigned_proctors.append(None)
 
         self.schedule_df['Proctor'] = assigned_proctors
         logging.info("Прокторы успешно назначены.")
-
 
 
 
@@ -410,7 +418,9 @@ class ExamScheduler:
                     'Students_Count': num_students,
                     'Room': best_room,
                     'Time_Slot': best_slot,
-                    'Student_Conflicts': min_conflicts
+                    'Student_Conflicts': min_conflicts,
+                    'proctor_needed': section_data.get('proctor_needed', True)  # Добавляем поле
+
                 })
 
                 # Обновляем занятость аудиторий и студентов

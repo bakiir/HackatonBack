@@ -749,5 +749,40 @@ def update_exam_status():
             'message': f'Ошибка при обновлении статуса экзаменов: {str(e)}'
         }), 500
 
+
+
+
+@app.route('/api/update_proctor_status', methods=['POST'])
+def update_proctor_status():
+    global current_scheduler
+
+    try:
+        data = request.json
+        if not data or 'exams' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Не предоставлены данные об экзаменах'
+            }), 400
+
+        for exam in data['exams']:
+            section_id = exam.get('section_id')
+            proctor_needed = exam.get('proctor_needed', False)
+            current_scheduler.exam_groups.loc[
+                current_scheduler.exam_groups['Section'] == section_id, 'proctor_needed'
+            ] = proctor_needed
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Статус прокторинга успешно обновлен'
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении статуса прокторинга: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Ошибка при обновлении статуса прокторинга: {str(e)}'
+        }), 500
+
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
