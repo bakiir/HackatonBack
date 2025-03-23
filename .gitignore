@@ -1,0 +1,10 @@
+# Игнорировать файл базы данных
+exam_sessions.db
+
+exams.xlsx
+exam_users.db
+general_schedule.xlsx
+faculties.xlsx
+rooms.xlsx
+
+
