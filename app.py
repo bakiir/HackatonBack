@@ -711,7 +711,43 @@ def login():
 
 
 
+@app.route('/api/update_exam_status', methods=['POST'])
+def update_exam_status():
+    global current_scheduler
 
+    try:
+        # Проверяем, инициализирован ли планировщик
+        if not current_scheduler:
+            return jsonify({
+                'status': 'error',
+                'message': 'Планировщик не инициализирован'
+            }), 400
+
+        # Получаем данные от фронта
+        data = request.json
+        if not data or 'exams' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Не предоставлены данные об экзаменах'
+            }), 400
+
+        # Обновляем статус экзаменов
+        for exam in data['exams']:
+            section_id = exam.get('section_id')
+            has_exam = exam.get('has_exam', True)  # По умолчанию True, если не указано
+            current_scheduler.update_exam_status(section_id, has_exam)
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Статус экзаменов успешно обновлен'
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении статуса экзаменов: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Ошибка при обновлении статуса экзаменов: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
