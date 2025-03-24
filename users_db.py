@@ -1,20 +1,16 @@
-from flask import Flask, request, jsonify
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import declarative_base, sessionmaker
 import bcrypt
-import jwt_service , jwt
+import jwt
 from datetime import datetime, timedelta
-
-# Инициализация Flask-приложения
-app = Flask(__name__)
 
 # Конфигурация JWT
 SECRET_KEY = "your-secret-key"  # Замените на реальный секретный ключ
-ALGORITHM = "HS256"  # Алгоритм подписи
-ACCESS_TOKEN_EXPIRE_MINUTES = 30  # Время жизни токена (в минутах)
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Подключение к базе данных
-engine = create_engine("sqlite:///exam_users.db", echo=True)
+engine = create_engine("sqlite:///exam_sessions.db", echo=True)
 Base = declarative_base()
 
 # Модель пользователя
@@ -23,82 +19,81 @@ class User(Base):
 
     id = Column(Integer, primary_key=True)
     email = Column(String, unique=True, nullable=False)
-    password = Column(String, nullable=False)  # Хэшированный пароль
-    role = Column(String, nullable=False)
+    password = Column(String, nullable=False)
+    full_name = Column(String, nullable=True)  # Это поле теперь будет создано
+    role = Column(String, nullable=False, default='student')
 
     def to_dict(self):
         return {
             "id": self.id,
             "email": self.email,
-            "role": self.role
+            "role": self.role,
+            "full_name": self.full_name
         }
 
     @classmethod
     def login_user(cls, session, email, password):
         """
-        Вход пользователя и генерация JWT-токена.
+        Аутентификация пользователя и генерация JWT токена
         """
         user = session.query(cls).filter_by(email=email).first()
         if not user:
-            return None  # Пользователь не найден
+            return None
 
-        # Проверка пароля
         if not bcrypt.checkpw(password.encode('utf-8'), user.password.encode('utf-8')):
-            return None  # Неверный пароль
+            return None
 
-        # Создание JWT-токена
-        token_data = {"sub": str(user.id), "role": user.role}
-        access_token = jwt_service.create_access_token(token_data)
+        token_data = {
+            "sub": str(user.id),
+            "role": user.role,
+            "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        }
+        access_token = jwt.encode(
+            token_data,
+            SECRET_KEY,
+            algorithm=ALGORITHM
+        )
         return {"user": user.to_dict(), "access_token": access_token}
 
     @classmethod
-    def register_user(cls, session, email, password, role="student"):
+    def register_user(cls, session, email, password, full_name=None, role="student"):
         """
-        Регистрация нового пользователя.
+        Регистрация нового пользователя
         """
-        # Проверка, существует ли пользователь с таким email
-        existing_user = session.query(cls).filter_by(email=email).first()
-        if existing_user:
+        if session.query(cls).filter_by(email=email).first():
             raise ValueError("Пользователь с таким email уже существует")
 
-        # Хэширование пароля
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-        # Создание нового пользователя
         new_user = cls(
             email=email,
-            password=hashed_password.decode('utf-8'),  # Сохраняем хэшированный пароль
-            role=role
+            password=hashed_password,
+            role=role,
+            full_name=full_name
         )
         session.add(new_user)
         session.commit()
         return new_user
 
-
-
     @classmethod
     def get_by_email(cls, session, email):
         """
-        Получение пользователя по email.
+        Получение пользователя по email
         """
         return session.query(cls).filter_by(email=email).first()
 
     @classmethod
-    def create_access_token(data: dict):
+    def create_access_token(cls, data):
         """
-        Создание JWT-токена.
+        Создание JWT токена
         """
         to_encode = data.copy()
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         to_encode.update({"exp": expire})
-        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-        return encoded_jwt
-
-
+        return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 # Создание таблиц в базе данных
 Base.metadata.create_all(engine)
 
 # Создание сессии
 Session = sessionmaker(bind=engine)
-

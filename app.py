@@ -4,6 +4,10 @@ from datetime import datetime
 import traceback
 from venv import logger
 import json
+
+import bcrypt
+from flask_jwt_extended import jwt_required, get_jwt_identity
+
 from users_db import User
 from flask import Flask, jsonify, send_file
 import logging
@@ -671,11 +675,12 @@ def register():
     email = data['email']
     password = data['password']
     role = data.get('role', 'student')  # По умолчанию роль 'student'
+    full_name = data['full_name']
 
     session = Session()
     try:
         # Регистрируем пользователя
-        user = User.register_user(session, email, password, role)
+        user = User.register_user(session, email, password, role, full_name)
         return jsonify({
             "message": "User registered successfully",
             "user": user.to_dict()
@@ -783,6 +788,65 @@ def update_proctor_status():
             'status': 'error',
             'message': f'Ошибка при обновлении статуса прокторинга: {str(e)}'
         }), 500
+
+
+@app.route('/api/upload-students', methods=['POST'])
+def upload_students():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['file']
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        return jsonify({'error': 'Invalid file format'}), 400
+
+    try:
+        df = pd.read_excel(file)
+        required_columns = ['fake_id', 'fake_name']  # Только обязательные поля
+
+        if not all(col in df.columns for col in required_columns):
+            return jsonify({'error': 'Missing required columns'}), 400
+
+        df = df.drop_duplicates(subset=['fake_id'])
+        session = Session()
+        results = {'created': [], 'errors': []}
+
+        for index, row in df.iterrows():
+            try:
+                # Проверка существования пользователя
+                if session.query(User).filter_by(email=str(row['fake_id'])).first():
+                    results['errors'].append(f"User {row['fake_id']} already exists")
+                    continue
+
+                # Создание пользователя
+                new_user = User(
+                    email=str(row['fake_id']),
+                    password=bcrypt.hashpw(row['fake_name'].encode('utf-8'), bcrypt.gensalt()).decode('utf-8'),
+                    full_name=row['fake_name'],
+                    role='student'
+                )
+                session.add(new_user)
+                session.commit()
+
+                results['created'].append({
+                    'id': new_user.id,
+                    'fake_id': row['fake_id'],
+                    'name': row['fake_name']
+                })
+
+            except Exception as e:
+                session.rollback()
+                results['errors'].append(f"Row {index + 2}: {str(e)}")
+
+        return jsonify({
+            'message': f"Processed {len(df)} rows",
+            'results': results
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
 
 
 if __name__ == '__main__':
