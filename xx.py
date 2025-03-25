@@ -844,38 +844,48 @@ class ExamScheduler:
         self._prepare_data()
 
     def assign_seats(self):
-        """Properly assigns seats to students in scheduled exams"""
+        """Распределяет студентов по аудиториям с учетом вместимости"""
         if not hasattr(self, 'schedule_df') or self.schedule_df.empty:
             return
 
         self.seat_assignments = {}
 
         for _, exam in self.schedule_df.iterrows():
-            # Extract actual room number (not date-time string)
-            room = exam['Room'].split('(')[0].strip() if '(' in exam['Room'] else exam['Room']
-            capacity = self.room_capacities.get(room, 25)  # Default to 25 if room not found
-            section = exam['Section']
-
-            # Get students for this section
             try:
-                section_students = self.exams_df[self.exams_df['Section'] == section]
-                if section_students.empty:
-                    logging.warning(f"No students found for section {section}")
+                # Парсим информацию об аудиториях (формат: "230(28) + 233(28)")
+                rooms = []
+                for room_part in exam['Room'].split('+'):
+                    room_info = room_part.strip().split('(')
+                    room_name = room_info[0].strip()
+                    capacity = int(room_info[1].replace(')', '')) if len(room_info) > 1 else 25
+                    rooms.append((room_name, capacity))
+
+                section = exam['Section']
+                students = self.get_students_for_section(section)
+
+                if not students:
                     continue
 
-                students = section_students['fake_id'].tolist()
+                # Распределяем студентов по аудиториям
+                student_index = 0
+                for room_name, capacity in rooms:
+                    for seat_num in range(1, capacity + 1):
+                        if student_index >= len(students):
+                            break
 
-                # Assign seats 1..capacity
-                for seat_num, student_id in enumerate(students[:capacity], 1):
-                    key = (exam['Date'], exam['Time_Slot'], exam['Subject'], str(student_id))
-                    self.seat_assignments[key] = {
-                        'room': room,
-                        'seat': seat_num,
-                        'instructor': exam['Instructor']
-                    }
+                        student_id = students[student_index]
+                        key = (exam['Date'], exam['Time_Slot'], exam['Subject'], str(student_id))
+                        self.seat_assignments[key] = {
+                            'room': room_name,
+                            'seat': seat_num,
+                            'instructor': exam['Instructor']
+                        }
+                        student_index += 1
 
             except Exception as e:
-                logging.error(f"Error assigning seats for section {section}: {str(e)}")
+                logging.error(f"Error assigning seats for section {exam.get('Section', 'unknown')}: {str(e)}")
+                continue
+
 
     def validate_schedule(self):
         """Validates the schedule before finalizing"""
@@ -893,8 +903,15 @@ class ExamScheduler:
 
         return errors
 
-
     def get_seat_assignment(self, student_id, exam_date, time_slot, subject):
-        """Возвращает назначение места для конкретного студента"""
+        """Возвращает информацию о месте студента"""
         key = (exam_date, time_slot, subject, str(student_id))
-        return self.seat_assignments.get(key, {'room': exam_date + ' ' + time_slot, 'seat': None})
+        return self.seat_assignments.get(key, {'room': 'Not assigned', 'seat': None})
+
+    def get_students_for_section(self, section_id):
+        """Возвращает список student_id для указанной секции"""
+        if not hasattr(self, 'exams_df'):
+            raise AttributeError("exams_df not loaded - please activate a complete session")
+
+        section_students = self.exams_df[self.exams_df['Section'] == section_id]
+        return section_students['fake_id'].tolist()
