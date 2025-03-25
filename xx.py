@@ -521,6 +521,8 @@ class ExamScheduler:
         # Логируем статистику
         self._log_schedule_stats()
         self.assign_proctors()
+        self.assign_seats()  # Назначаем места в уже выбранных аудиториях
+
 
     def _log_schedule_stats(self):
         """Логирование статистики расписания"""
@@ -840,3 +842,59 @@ class ExamScheduler:
         """Загрузка расписания из сохраненной сессии"""
         self.schedule_df = pd.DataFrame(session_data['schedule'])
         self._prepare_data()
+
+    def assign_seats(self):
+        """Properly assigns seats to students in scheduled exams"""
+        if not hasattr(self, 'schedule_df') or self.schedule_df.empty:
+            return
+
+        self.seat_assignments = {}
+
+        for _, exam in self.schedule_df.iterrows():
+            # Extract actual room number (not date-time string)
+            room = exam['Room'].split('(')[0].strip() if '(' in exam['Room'] else exam['Room']
+            capacity = self.room_capacities.get(room, 25)  # Default to 25 if room not found
+            section = exam['Section']
+
+            # Get students for this section
+            try:
+                section_students = self.exams_df[self.exams_df['Section'] == section]
+                if section_students.empty:
+                    logging.warning(f"No students found for section {section}")
+                    continue
+
+                students = section_students['fake_id'].tolist()
+
+                # Assign seats 1..capacity
+                for seat_num, student_id in enumerate(students[:capacity], 1):
+                    key = (exam['Date'], exam['Time_Slot'], exam['Subject'], str(student_id))
+                    self.seat_assignments[key] = {
+                        'room': room,
+                        'seat': seat_num,
+                        'instructor': exam['Instructor']
+                    }
+
+            except Exception as e:
+                logging.error(f"Error assigning seats for section {section}: {str(e)}")
+
+    def validate_schedule(self):
+        """Validates the schedule before finalizing"""
+        errors = []
+
+        # Check all students have sections
+        orphan_students = set(self.exams_df['fake_id']) - set(self.schedule_df['Section'].explode())
+        if orphan_students:
+            errors.append(f"{len(orphan_students)} students without scheduled sections")
+
+        # Check room assignments
+        for room in self.schedule_df['Room'].unique():
+            if room not in self.room_capacities:
+                errors.append(f"Room {room} not found in room capacities")
+
+        return errors
+
+
+    def get_seat_assignment(self, student_id, exam_date, time_slot, subject):
+        """Возвращает назначение места для конкретного студента"""
+        key = (exam_date, time_slot, subject, str(student_id))
+        return self.seat_assignments.get(key, {'room': exam_date + ' ' + time_slot, 'seat': None})

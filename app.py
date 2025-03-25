@@ -388,10 +388,6 @@ def get_schedule_stats():
     })
 
 
-@app.route('/schedule/student/<student_id>')
-def get_student_schedule(student_id):
-    student_schedule = current_scheduler.get_student_sections(student_id)
-    return jsonify(student_schedule.to_dict('records'))
 
 
 @app.route('/schedule/export')
@@ -401,11 +397,6 @@ def export_schedule():
     return send_file(output_file, as_attachment=True)
 
 
-@app.route('/schedule/student/<student_id>/export')
-def export_student_schedule(student_id):
-    output_file = f"student_{student_id}_schedule.xlsx"
-    current_scheduler.export_student_schedule_to_excel(student_id, output_file)
-    return send_file(output_file, as_attachment=True)
 
 
 def convert_numpy_types(obj):
@@ -847,6 +838,51 @@ def upload_students():
     finally:
         session.close()
 
+
+@app.route('/schedule/student/<string:student_id>')
+def get_student_schedule(student_id):
+    try:
+        if not current_scheduler:
+            return jsonify({"error": "Scheduler not initialized"}), 500
+
+        student_schedule = current_scheduler.get_student_sections(student_id)
+        if student_schedule.empty:
+            return jsonify({"error": "Schedule not found"}), 404
+
+        result = []
+        for _, exam in student_schedule.iterrows():
+            seat_info = current_scheduler.get_seat_assignment(
+                student_id=student_id,
+                exam_date=exam['Date'],
+                time_slot=exam['Time_Slot'],
+                subject=exam['Subject']
+            )
+
+            result.append({
+                "subject": exam['Subject'],
+                "date": exam['Date'],
+                "time": exam['Time_Slot'],
+                "room": seat_info['room'],
+                "seat": seat_info['seat'],
+                "instructor": exam['Instructor']
+            })
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/schedule/student/<student_id>/export')
+def export_student_schedule(student_id):
+    output_file = f"student_{student_id}_schedule.xlsx"
+    current_scheduler.export_student_schedule_to_excel(student_id, output_file)
+    return send_file(output_file, as_attachment=True)
+
+
+# @app.route('/schedule/student/<student_id>')
+# def get_student_schedule(student_id):
+#     student_schedule = current_scheduler.get_student_sections(student_id)
+#     return jsonify(student_schedule.to_dict('records'))
 
 
 if __name__ == '__main__':
