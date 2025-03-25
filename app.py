@@ -2,6 +2,7 @@ import tempfile
 import math
 from datetime import datetime
 import traceback
+from sched import scheduler
 from venv import logger
 import json
 
@@ -856,15 +857,18 @@ def get_student_schedule(student_id):
                 exam_date=exam['Date'],
                 time_slot=exam['Time_Slot'],
                 subject=exam['Subject']
+
             )
 
             result.append({
-                "subject": exam['Subject'],
-                "date": exam['Date'],
-                "time": exam['Time_Slot'],
-                "room": seat_info['room'],
-                "seat": seat_info['seat'],
-                "instructor": exam['Instructor']
+                "Subject": exam['Subject'],
+                "Date": exam['Date'],
+                "Time": exam['Time_Slot'],
+                "Room": seat_info['room'],
+                "Seat": seat_info['seat'],
+                "Instructor": exam['Instructor'],
+                "Section": exam['Section'],
+                "Students_Count": exam['Students_Count']
             })
 
         return jsonify(result)
@@ -881,7 +885,7 @@ def export_student_schedule(student_id):
 
 # @app.route('/schedule/student/<student_id>')
 # def get_student_schedule(student_id):
-#     student_schedule = current_scheduler.get_student_sections(student_id)
+#     student_schedule = scheduler.get_student_sections(student_id)
 #     return jsonify(student_schedule.to_dict('records'))
 
 
