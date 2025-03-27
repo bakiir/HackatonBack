@@ -883,6 +883,53 @@ def export_student_schedule(student_id):
     return send_file(output_file, as_attachment=True)
 
 
+@app.route('/api/update_exam_durations', methods=['POST'])
+def handle_update_durations():
+    global current_scheduler
+
+    try:
+        if not current_scheduler:
+            return jsonify({
+                'status': 'error',
+                'message': 'Планировщик не инициализирован'
+            }), 400
+
+        data = request.json
+        if not data or 'exams' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Не предоставлены данные об экзаменах'
+            }), 400
+
+        # Валидация данных
+        for exam in data['exams']:
+            if 'section_id' not in exam or 'duration' not in exam:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Каждый экзамен должен содержать section_id и duration'
+                }), 400
+
+            if exam['duration'] not in [60, 120, 180]:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Длительность экзамена может быть только 60, 120 или 180 минут'
+                }), 400
+
+        # Обновляем длительности
+        current_scheduler.update_exam_durations(data['exams'])
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Длительности экзаменов успешно обновлены'
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении длительностей: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Ошибка при обновлении длительностей: {str(e)}'
+        }), 500
+
 # @app.route('/schedule/student/<student_id>')
 # def get_student_schedule(student_id):
 #     student_schedule = scheduler.get_student_sections(student_id)

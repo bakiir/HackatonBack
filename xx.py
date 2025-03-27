@@ -169,7 +169,8 @@ class ExamScheduler:
             self.rooms_df['Аудитория'], self.rooms_df['Вместительность аудитории']
         ))
         self.all_students_dict = self.exams_df[['fake_id', 'fake_name']].drop_duplicates().to_dict('records')
-
+        # В методе _prepare_data:
+        self.exam_groups["Duration"] = 180  # Дефолтная длительность
         self.subject_faculty_map = self.faculties_df.groupby('Subject')['Faculty'].apply(set).to_dict()
 
         self.faculty_proctors = self.faculties_df.groupby('Faculty')['Instructor'].apply(list).to_dict()
@@ -177,6 +178,29 @@ class ExamScheduler:
         total_slots = len(self.rooms) * len(self.time_slots) * self.original_num_days
         logging.info(f"Всего экзаменов: {len(self.exam_groups)}")
         logging.info(f"Всего временных слотов: {total_slots}")
+
+    def update_exam_durations(self, exam_data):
+        """
+        Обновляет длительность экзаменов в exam_groups.
+
+        :param exam_data: Список словарей с данными об экзаменах.
+            Пример: [{"section_id": "Opt Math-1532", "duration": 60}, ...]
+        """
+        for exam in exam_data:
+            section_id = exam["section_id"]
+            duration = exam["duration"]
+
+            # Проверяем допустимые значения длительности
+            if duration not in [60, 120, 180]:
+                raise ValueError(f"Недопустимая длительность {duration}. Допустимые значения: 60, 120 или 180 минут.")
+
+            # Находим и обновляем запись
+            if section_id not in self.exam_groups['Section'].values:
+                raise ValueError(f"Секция {section_id} не найдена")
+
+            self.exam_groups.loc[self.exam_groups['Section'] == section_id, "Duration"] = duration
+
+        logging.info(f"Обновлены длительности для {len(exam_data)} экзаменов")
 
     def _generate_initial_dates(self):
         """Генерирует начальный список дат"""
@@ -368,7 +392,7 @@ class ExamScheduler:
         student_exams_per_day = {}
         failed_sections = []
 
-        # Инициализация доступности аудиторий
+        # Инициализация доступности аудиторий для всех стандартных слотов
         self.room_availability = {
             day: {slot: set() for slot in self.time_slots}
             for day in self.custom_dates
@@ -396,6 +420,7 @@ class ExamScheduler:
             section_students = self.exams_df[self.exams_df['Section'] == section]['fake_id'].unique()
             num_students = len(section_students)
             instructor = section_data['Instructor']
+            duration = int(section_data.get('Duration', 180))  # Преобразуем в int
 
             best_slots = []
 
@@ -411,10 +436,24 @@ class ExamScheduler:
                 if instructor_busy:
                     continue
 
+                # Используем стандартные слоты для бронирования
                 time_slots = list(self.time_slots)
                 random.shuffle(time_slots)
 
-                for time_slot in time_slots:
+                for base_slot in time_slots:
+                    # Проверяем, что базовый слот достаточно длинный
+                    start_time, end_time = base_slot.split('-')
+                    start_dt = datetime.strptime(start_time, '%H:%M')
+                    end_dt = datetime.strptime(end_time, '%H:%M')
+                    slot_duration = (end_dt - start_dt).total_seconds() / 60
+
+                    if slot_duration < duration:
+                        continue  # Пропускаем слоты, которые короче нужной длительности
+
+                    # Формируем фактический слот для экзамена
+                    actual_end_time = (start_dt + timedelta(minutes=duration)).strftime('%H:%M')
+                    actual_slot = f"{start_time}-{actual_end_time}"
+
                     student_conflicts = sum(
                         1 for student in section_students
                         if student_exams_per_day.get(student, {}).get(exam_date, 0) == 1
@@ -422,7 +461,7 @@ class ExamScheduler:
 
                     available_rooms = [
                         room for room in self.rooms
-                        if room not in self.room_availability[day][time_slot]
+                        if room not in self.room_availability[day][base_slot]
                     ]
 
                     if not available_rooms:
@@ -454,8 +493,8 @@ class ExamScheduler:
 
                         if main_room and extra_room:
                             best_slots.append((
-                                day, time_slot, [main_room, extra_room],
-                                student_conflicts, slot_usage_count[time_slot]
+                                day, base_slot, actual_slot, [main_room, extra_room],
+                                student_conflicts, slot_usage_count[base_slot]
                             ))
                     else:
                         # Обычное распределение (до 25 студентов)
@@ -469,25 +508,25 @@ class ExamScheduler:
                                 key=lambda r: abs(self.room_capacities[r] - num_students)
                             )
                             best_slots.append((
-                                day, time_slot, [best_room],
-                                student_conflicts, slot_usage_count[time_slot]
+                                day, base_slot, actual_slot, [best_room],
+                                student_conflicts, slot_usage_count[base_slot]
                             ))
 
             if best_slots:
-                best_slots.sort(key=lambda x: x[3])  # Сортировка по конфликтам
-                min_conflicts = best_slots[0][3]
-                best_slots = [slot for slot in best_slots if slot[3] == min_conflicts]
+                best_slots.sort(key=lambda x: x[4])  # Сортировка по конфликтам
+                min_conflicts = best_slots[0][4]
+                best_slots = [slot for slot in best_slots if slot[4] == min_conflicts]
 
-                best_day, best_slot, best_rooms, min_conflicts, _ = min(
-                    best_slots, key=lambda x: x[4]
+                best_day, best_base_slot, best_actual_slot, best_rooms, min_conflicts, _ = min(
+                    best_slots, key=lambda x: x[5]
                 )
 
-                slot_usage_count[best_slot] += 1
+                slot_usage_count[best_base_slot] += 1
                 exam_date = best_day.strftime('%Y-%m-%d')
 
-                # Бронируем все аудитории
+                # Бронируем все аудитории в базовом слоте
                 for room in best_rooms:
-                    self.room_availability[best_day][best_slot].add(room)
+                    self.room_availability[best_day][best_base_slot].add(room)
 
                 # Добавляем запись в расписание
                 room_str = " + ".join(f"{room}({self.room_capacities[room]})" for room in best_rooms)
@@ -499,10 +538,12 @@ class ExamScheduler:
                     'Section': section,
                     'Students_Count': num_students,
                     'Room': room_str,
-                    'Time_Slot': best_slot,
+                    'Time_Slot': best_actual_slot,
+                    'Base_Time_Slot': best_base_slot,  # Сохраняем базовый слот для статистики
+                    'Duration': duration,
                     'Student_Conflicts': min_conflicts,
                     'proctor_needed': section_data.get('proctor_needed', True),
-                    'Split_Rooms': len(best_rooms) > 1  # Флаг разделения
+                    'Split_Rooms': len(best_rooms) > 1
                 })
 
                 for student in section_students:
@@ -512,7 +553,8 @@ class ExamScheduler:
                 failed_sections.append({
                     'section': section,
                     'reason': "Не найдено подходящих слотов",
-                    'students_count': num_students
+                    'students_count': num_students,
+                    'duration': duration
                 })
 
         # Создаем DataFrame
@@ -521,8 +563,7 @@ class ExamScheduler:
         # Логируем статистику
         self._log_schedule_stats()
         self.assign_proctors()
-        self.assign_seats()  # Назначаем места в уже выбранных аудиториях
-
+        self.assign_seats()
 
     def _log_schedule_stats(self):
         """Логирование статистики расписания"""
@@ -530,10 +571,12 @@ class ExamScheduler:
             logging.warning("Расписание не было создано")
             return
 
+        # Используем Base_Time_Slot для статистики использования слотов
         slot_usage = {day: {slot: 0 for slot in self.time_slots} for day in self.custom_dates}
         for _, exam in self.schedule_df.iterrows():
             day = datetime.strptime(exam['Date'], '%Y-%m-%d')
-            slot_usage[day][exam['Time_Slot']] += 1
+            base_slot = exam['Base_Time_Slot']
+            slot_usage[day][base_slot] += 1
 
         for day in self.custom_dates:
             total_slots = len(self.time_slots)
