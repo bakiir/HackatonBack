@@ -217,15 +217,19 @@ def handle_management():
                 # Deactivate all previous sessions
                 session.query(ExamSession).update({'is_active': False})
 
-                # Create a new exam session
                 new_session = ExamSession(
                     title=current_scheduler.title,
                     start_date=current_scheduler.original_start_date,
-                    # end_date=datetime.strptime(data['end_date'], '%Y-%m-%d').date(),
-                    schedule_data=json.dumps(handle_nan_values(current_scheduler.schedule_df)),
-                    days = current_scheduler.original_num_days,
-                    is_active= True
+                    original_start_date=current_scheduler.original_start_date,  # Сохраняем
+                    original_num_days=current_scheduler.original_num_days,  # Сохраняем
+                    days=current_scheduler.original_num_days,  # Для обратной совместимости
+                    schedule_data=current_scheduler.schedule_df.to_json(orient='records'),
+                    exams_data=current_scheduler.exams_df.astype(str).to_json()                ,
+                    rooms_data=current_scheduler.rooms_df.to_json(orient='records'),
+                    faculties_data=current_scheduler.faculties_df.to_json(orient='records'),
+                    is_active=True
                 )
+
                 session.add(new_session)
                 session.commit()
 
@@ -327,20 +331,21 @@ def activate_session(session_id):
     global current_scheduler
 
     try:
-        # Получаем сессию по ID
         session = db_session.query(ExamSession).get(session_id)
         if not session:
             return jsonify({"error": "Session not found"}), 404
 
-        # Деактивируем все сессии
-        db_session.query(ExamSession).update({"is_active": False})
+        # Проверка наличия обязательных полей
+        if not hasattr(session, 'original_num_days'):
+            session.original_num_days = session.days  # Для обратной совместимости
+        if not hasattr(session, 'original_start_date'):
+            session.original_start_date = session.start_date
 
-        # Активируем выбранную сессию
+        current_scheduler = ExamScheduler(session_data=session)
+
+        db_session.query(ExamSession).update({"is_active": False})
         session.is_active = True
         db_session.commit()
-
-        # Инициализация планировщика данными из сессии
-        current_scheduler = ExamScheduler(session_data=session)
 
         return jsonify({
             "status": "success",
@@ -349,7 +354,10 @@ def activate_session(session_id):
 
     except Exception as e:
         db_session.rollback()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
     finally:
         db_session.close()
 
@@ -844,37 +852,28 @@ def upload_students():
 def get_student_schedule(student_id):
     try:
         if not current_scheduler:
-            return jsonify({"error": "Scheduler not initialized"}), 500
+            return jsonify({"error": "Планировщик не инициализирован"}), 500
 
         student_schedule = current_scheduler.get_student_sections(student_id)
+
         if student_schedule.empty:
-            return jsonify({"error": "Schedule not found"}), 404
+            return jsonify({"error": "Расписание не найдено"}), 404
 
-        result = []
-        for _, exam in student_schedule.iterrows():
-            seat_info = current_scheduler.get_seat_assignment(
-                student_id=student_id,
-                exam_date=exam['Date'],
-                time_slot=exam['Time_Slot'],
-                subject=exam['Subject']
+        # Конвертация в словарь с обработкой NaN
+        result = student_schedule.drop(
+            columns=['Proctor', 'Student_Conflicts', 'proctor_needed'],
+            errors='ignore'  # Игнорировать, если столбцы не существуют
+        ).replace({np.nan: None}).to_dict('records')
 
-            )
-
-            result.append({
-                "Subject": exam['Subject'],
-                "Date": exam['Date'],
-                "Time": exam['Time_Slot'],
-                "Room": seat_info['room'],
-                "Seat": seat_info['seat'],
-                "Instructor": exam['Instructor'],
-                "Section": exam['Section'],
-                "Students_Count": exam['Students_Count']
-            })
 
         return jsonify(result)
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Ошибка при получении расписания: {traceback.format_exc()}")
+        return jsonify({
+            "error": "Внутренняя ошибка сервера",
+            "details": str(e)
+        }), 500
 
 @app.route('/schedule/student/<student_id>/export')
 def export_student_schedule(student_id):

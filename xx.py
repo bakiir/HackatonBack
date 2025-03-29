@@ -3,6 +3,8 @@ import random
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
+from io import StringIO
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -123,11 +125,23 @@ class ExamScheduler:
         self.start_date = session_data.start_date
         self.num_days = session_data.days
         self.custom_dates = [self.start_date + timedelta(days=i) for i in range(self.num_days)]
+        self.exams_df['fake_id'] = self.exams_df['fake_id'].astype(str)
+        self.schedule_df['Section'] = self.schedule_df['Section'].astype(str)
 
-        # Если есть данные расписания
+        logging.info(f"Проверка загрузки данных:")
+        logging.info(f"Студенты: {self.exams_df['fake_id'].unique()[:5]}")
+        logging.info(f"Секции в расписании: {self.schedule_df['Section'].unique()[:5]}")
+        # Загрузка всех данных с использованием StringIO
         if session_data.schedule_data:
-            self.schedule_df = pd.DataFrame(json.loads(session_data.schedule_data))
-            self._derive_metadata()
+            self.schedule_df = pd.read_json(StringIO(session_data.schedule_data))
+        if session_data.exams_data:
+            self.exams_df = pd.read_json(StringIO(session_data.exams_data))
+        if session_data.rooms_data:
+            self.rooms_df = pd.read_json(StringIO(session_data.rooms_data))
+        if session_data.faculties_data:
+            self.faculties_df = pd.read_json(StringIO(session_data.faculties_data))
+
+        self._prepare_data()
 
     def _derive_metadata(self):
         """Извлечение метаданных из существующего расписания"""
@@ -271,27 +285,37 @@ class ExamScheduler:
         self.create_schedule()
         print("Расписание успешно создано!")
 
-
-
     def get_student_sections(self, student_id):
         logging.info(f"Поиск секций для студента {student_id}.")
 
-        if self.schedule_df is None:
+        # Проверка наличия данных
+        if self.exams_df is None or self.exams_df.empty:
+            logging.error("Ошибка: Данные о студентах не загружены!")
+            return pd.DataFrame()
+
+        if self.schedule_df is None or self.schedule_df.empty:
             logging.warning("Расписание не создано. Сначала создайте расписание.")
             return pd.DataFrame()
 
-        student_sections = self.exams_df[self.exams_df['fake_id'] == student_id]['Section'].unique()
+        try:
+            # Приведение student_id к строке
+            student_id = str(student_id)
 
-        if len(student_sections) == 0:
-            logging.warning(f"Для студента {student_id} не найдено секций.")
+            # Поиск секций студента
+            student_sections = self.exams_df[self.exams_df['fake_id'] == student_id]['Section'].unique()
+
+            if len(student_sections) == 0:
+                logging.warning(f"Студент {student_id} не найден в базе данных")
+                return pd.DataFrame()
+
+            # Фильтрация расписания
+            student_schedule = self.schedule_df[self.schedule_df['Section'].isin(student_sections)]
+
+            return student_schedule.sort_values(['Date', 'Time_Slot'])
+
+        except Exception as e:
+            logging.error(f"Ошибка при поиске секций: {str(e)}")
             return pd.DataFrame()
-
-        student_schedule = self.schedule_df[self.schedule_df['Section'].isin(student_sections)]
-
-        if not student_schedule.empty:
-            student_schedule = student_schedule.sort_values(['Date', 'Time_Slot'])
-
-        return student_schedule
 
     def assign_proctors(self):
         logging.info("Назначение прокторов.")
@@ -881,9 +905,31 @@ class ExamScheduler:
         self.schedule_df.to_excel(output_excel, index=False)
         logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
 
-    def load_from_session(self, session_data: dict):
-        """Загрузка расписания из сохраненной сессии"""
-        self.schedule_df = pd.DataFrame(session_data['schedule'])
+    def _load_from_session(self, session_data):
+        """Загрузка данных из активированной сессии"""
+        from io import StringIO
+        import pandas as pd
+
+        self.title = session_data.title
+        self.original_start_date = session_data.original_start_date
+        self.original_num_days = session_data.original_num_days
+        self.custom_dates = [session_data.start_date + timedelta(days=i)
+                             for i in range(session_data.days)]
+
+        # Загрузка данных с обработкой ошибок
+        try:
+            if session_data.schedule_data:
+                self.schedule_df = pd.read_json(StringIO(session_data.schedule_data))
+            if session_data.exams_data:
+                self.exams_df = pd.read_json(StringIO(session_data.exams_data))
+            if session_data.rooms_data:
+                self.rooms_df = pd.read_json(StringIO(session_data.rooms_data))
+            if session_data.faculties_data:
+                self.faculties_df = pd.read_json(StringIO(session_data.faculties_data))
+        except Exception as e:
+            logging.error(f"Ошибка загрузки данных: {str(e)}")
+            raise ValueError(f"Ошибка загрузки данных сессии: {str(e)}")
+
         self._prepare_data()
 
     def assign_seats(self):

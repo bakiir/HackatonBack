@@ -12,14 +12,21 @@ Base = declarative_base()
 
 class ExamSession(Base):
     __tablename__ = "exam_session"
-
     id = Column(Integer, primary_key=True)
     title = Column(String(150), nullable=False)
-    start_date = Column(Date, nullable=False)  # Важно: нет запятой в конце
+    start_date = Column(Date, nullable=False)
     days = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
-    schedule_data = Column(Text, nullable=False)
-    is_active = Column(Boolean, default=False, nullable=True)
+
+    original_start_date = Column(Date)  # Добавлено
+    original_num_days = Column(Integer)  # Добавлено
+
+    # Измененные поля для хранения всех данных
+    schedule_data = Column(Text)
+    exams_data = Column(Text)
+    rooms_data = Column(Text)
+    faculties_data = Column(Text)
+    is_active = Column(Boolean, default=False)
 
 
     def set_schedule(self, schedule_dict):
@@ -36,7 +43,9 @@ class ExamSession(Base):
             "days": self.days,
             "created_at": self.created_at.isoformat(),
             "schedule_data": self.get_schedule(),  # Добавлено расписание
-            "is_active": self.is_active
+            "is_active": self.is_active,
+            "rooms_data": self.rooms_data,
+            "faculties_data": self.faculties_data
         }
 
 # Создаем таблицу, если её еще нет
