@@ -220,16 +220,16 @@ def handle_management():
                 new_session = ExamSession(
                     title=current_scheduler.title,
                     start_date=current_scheduler.original_start_date,
-                    original_start_date=current_scheduler.original_start_date,  # Сохраняем
-                    original_num_days=current_scheduler.original_num_days,  # Сохраняем
-                    days=current_scheduler.original_num_days,  # Для обратной совместимости
+                    original_start_date=current_scheduler.original_start_date,
+                    days=current_scheduler.original_num_days,
+                    original_num_days=current_scheduler.original_num_days,
                     schedule_data=current_scheduler.schedule_df.to_json(orient='records'),
-                    exams_data=current_scheduler.exams_df.astype(str).to_json()                ,
+                    exams_data=current_scheduler.exams_df.to_json(orient='records'),
                     rooms_data=current_scheduler.rooms_df.to_json(orient='records'),
                     faculties_data=current_scheduler.faculties_df.to_json(orient='records'),
+                    seat_assignments=current_scheduler.seat_assignments,  # Просто словарь
                     is_active=True
                 )
-
                 session.add(new_session)
                 session.commit()
 
@@ -328,20 +328,23 @@ def get_session_details(session_id):
 @app.route('/api/sessions/<int:session_id>/activate', methods=['POST'])
 def activate_session(session_id):
     db_session = Session()
-    global current_scheduler
-
     try:
         session = db_session.query(ExamSession).get(session_id)
         if not session:
             return jsonify({"error": "Session not found"}), 404
 
-        # Проверка наличия обязательных полей
-        if not hasattr(session, 'original_num_days'):
-            session.original_num_days = session.days  # Для обратной совместимости
-        if not hasattr(session, 'original_start_date'):
-            session.original_start_date = session.start_date
+        global current_scheduler
 
+        # Загружаем данные сессии
         current_scheduler = ExamScheduler(session_data=session)
+
+        # Дополнительная проверка seat_assignments
+        if not hasattr(current_scheduler, 'seat_assignments') or not current_scheduler.seat_assignments:
+            if session.seat_assignments:
+                current_scheduler.seat_assignments = session.seat_assignments
+                logging.info("Loaded seat_assignments directly from session")
+            else:
+                logging.warning("No seat_assignments in session data")
 
         db_session.query(ExamSession).update({"is_active": False})
         session.is_active = True
@@ -349,17 +352,16 @@ def activate_session(session_id):
 
         return jsonify({
             "status": "success",
-            "session": session.to_dict()
-        }), 200
+            "seat_assignments_loaded": bool(hasattr(current_scheduler, 'seat_assignments') and
+                                            current_scheduler.seat_assignments)
+        })
 
     except Exception as e:
         db_session.rollback()
-        return jsonify({
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }), 500
+        return jsonify({"error": str(e)}), 500
     finally:
         db_session.close()
+
 
 @app.route('/api/sessions/<int:session_id>', methods=['DELETE'])
 def delete_session(session_id):
@@ -854,17 +856,65 @@ def get_student_schedule(student_id):
         if not current_scheduler:
             return jsonify({"error": "Планировщик не инициализирован"}), 500
 
+        # Диагностика: логируем первые 5 ключей из seat_assignments
+        if hasattr(current_scheduler, 'seat_assignments'):
+            sample_keys = list(current_scheduler.seat_assignments.keys())[:5]
+            logging.info(f"Sample seat assignment keys: {sample_keys}")
+        else:
+            logging.error("No seat_assignments in scheduler!")
+
         student_schedule = current_scheduler.get_student_sections(student_id)
 
         if student_schedule.empty:
             return jsonify({"error": "Расписание не найдено"}), 404
 
-        # Конвертация в словарь с обработкой NaN
         result = student_schedule.drop(
             columns=['Proctor', 'Student_Conflicts', 'proctor_needed'],
-            errors='ignore'  # Игнорировать, если столбцы не существуют
+            errors='ignore'
         ).replace({np.nan: None}).to_dict('records')
 
+        for exam in result:
+            try:
+                # Формируем ключ для поиска
+                date_part = exam['Date']
+                time_slot = exam['Time_Slot'].strip()
+                subject = exam['Subject'].strip()
+
+                # Вариант 1: точное совпадение
+                exact_key = f"{date_part}|{time_slot}|{subject}|{student_id}"
+
+                # Вариант 2: без учёта пробелов
+                clean_key = f"{date_part}|{time_slot}|{subject.replace(' ', '')}|{student_id}"
+
+                # Вариант 3: с нормализацией Unicode
+                normalized_key = f"{date_part}|{time_slot}|{subject.encode('unicode-escape').decode()}|{student_id}"
+
+                logging.info(f"Searching seat for key: {exact_key}")
+
+                # Пробуем разные варианты ключей
+                seat_info = (current_scheduler.seat_assignments.get(exact_key) or
+                             current_scheduler.seat_assignments.get(clean_key) or
+                             next((v for k, v in current_scheduler.seat_assignments.items()
+                                   if student_id in k and subject in k and time_slot in k), None))
+
+                if seat_info:
+                    exam['seat_info'] = {
+                        'seat_number': seat_info.get('seat'),
+                    }
+                    logging.info(f"Found seat info: {exam['seat_info']}")
+                else:
+                    exam['seat_info'] = {
+                        'seat_number': None,
+                    }
+                    logging.warning(f"No seat found for student {student_id} in {subject} on {date_part} {time_slot}")
+
+            except Exception as e:
+                logging.error(f"Error processing seat info: {str(e)}")
+                exam['seat_info'] = {
+                    'room': 'Ошибка',
+                    'seat_number': None,
+                    'instructor': 'Ошибка обработки'
+                }
 
         return jsonify(result)
 
@@ -874,6 +924,7 @@ def get_student_schedule(student_id):
             "error": "Внутренняя ошибка сервера",
             "details": str(e)
         }), 500
+
 
 @app.route('/schedule/student/<student_id>/export')
 def export_student_schedule(student_id):

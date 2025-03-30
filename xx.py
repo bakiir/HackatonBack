@@ -1,9 +1,12 @@
 import json
 import random
+import traceback
+
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
 from io import StringIO
+
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -31,6 +34,7 @@ class ExamScheduler:
         self.time_step = time_step
         self.work_day_start = datetime.strptime(work_day_start, "%H:%M")
         self.work_day_end = datetime.strptime(work_day_end, "%H:%M")
+        self.seat_assignments = {}  
 
 
         self.exam_groups = pd.read_excel(exams_file) if exams_file else pd.DataFrame()
@@ -120,28 +124,81 @@ class ExamScheduler:
         return slots
 
     def _load_from_session(self, session_data):
-        """Загрузка данных из активированной сессии"""
-        self.title = session_data.title
-        self.start_date = session_data.start_date
-        self.num_days = session_data.days
-        self.custom_dates = [self.start_date + timedelta(days=i) for i in range(self.num_days)]
-        self.exams_df['fake_id'] = self.exams_df['fake_id'].astype(str)
-        self.schedule_df['Section'] = self.schedule_df['Section'].astype(str)
+        """
+        Загружает все данные из сохраненной сессии, включая распределение мест
+        """
 
-        logging.info(f"Проверка загрузки данных:")
-        logging.info(f"Студенты: {self.exams_df['fake_id'].unique()[:5]}")
-        logging.info(f"Секции в расписании: {self.schedule_df['Section'].unique()[:5]}")
-        # Загрузка всех данных с использованием StringIO
-        if session_data.schedule_data:
-            self.schedule_df = pd.read_json(StringIO(session_data.schedule_data))
-        if session_data.exams_data:
-            self.exams_df = pd.read_json(StringIO(session_data.exams_data))
-        if session_data.rooms_data:
-            self.rooms_df = pd.read_json(StringIO(session_data.rooms_data))
-        if session_data.faculties_data:
-            self.faculties_df = pd.read_json(StringIO(session_data.faculties_data))
+        logging.info("Начало загрузки данных из сессии")
 
-        self._prepare_data()
+        try:
+            # 1. Загружаем основные атрибуты
+            self.title = session_data.title
+            self.original_start_date = session_data.original_start_date
+            self.original_num_days = session_data.original_num_days
+            self.custom_dates = [session_data.start_date + timedelta(days=i)
+                                 for i in range(session_data.days)]
+
+            # 2. Загружаем DataFrame
+            if session_data.schedule_data:
+                self.schedule_df = pd.read_json(StringIO(session_data.schedule_data))
+                logging.info(f"Загружено расписание: {len(self.schedule_df)} записей")
+
+            if session_data.exams_data:
+                self.exams_df = pd.read_json(StringIO(session_data.exams_data))
+                self.exams_df['fake_id'] = self.exams_df['fake_id'].astype(str)
+                logging.info(f"Загружены студенты: {len(self.exams_df)} записей")
+
+            if session_data.rooms_data:
+                self.rooms_df = pd.read_json(StringIO(session_data.rooms_data))
+
+            if session_data.faculties_data:
+                self.faculties_df = pd.read_json(StringIO(session_data.faculties_data))
+
+            # 3. Загружаем распределение мест
+            self.seat_assignments = {}
+            if hasattr(session_data, 'seat_assignments') and session_data.seat_assignments:
+                try:
+                    loaded_assignments = session_data.seat_assignments
+
+                    # Если данные хранятся как JSON строка
+                    if isinstance(loaded_assignments, str):
+                        loaded_assignments = json.loads(loaded_assignments)
+
+                    # Преобразуем ключи обратно в кортежи
+                    for key_str, value in loaded_assignments.items():
+                        try:
+                            # Разбираем ключ (формат: "date|time|subject|student")
+                            parts = key_str.split('|')
+                            if len(parts) == 4:
+                                date_obj = datetime.strptime(parts[0], "%Y-%m-%d").date()
+                                key = (date_obj, parts[1].strip(), parts[2].strip(), parts[3].strip())
+                                self.seat_assignments[key] = value
+                        except Exception as e:
+                            logging.error(f"Ошибка обработки ключа '{key_str}': {str(e)}")
+                            continue
+
+                    logging.info(f"Успешно загружено {len(self.seat_assignments)} записей о местах")
+
+                    # Проверка загрузки
+                    if self.seat_assignments:
+                        sample_key = next(iter(self.seat_assignments))
+                        logging.info(f"Пример записи о месте: {sample_key} => {self.seat_assignments[sample_key]}")
+
+                except Exception as e:
+                    logging.error(f"Ошибка загрузки seat_assignments: {str(e)}")
+                    self.seat_assignments = {}
+            else:
+                logging.warning("Данные о местах не найдены в сессии - будет выполнено новое распределение")
+                self.assign_seats()  # Распределяем места заново
+
+            # 4. Выполняем финальную подготовку данных
+            self._prepare_data()
+            logging.info("Загрузка сессии завершена успешно")
+
+        except Exception as e:
+            logging.error(f"Критическая ошибка загрузки сессии: {traceback.format_exc()}")
+            raise ValueError(f"Ошибка загрузки сессии: {str(e)}")
+
 
     def _derive_metadata(self):
         """Извлечение метаданных из существующего расписания"""
@@ -905,75 +962,84 @@ class ExamScheduler:
         self.schedule_df.to_excel(output_excel, index=False)
         logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
 
-    def _load_from_session(self, session_data):
-        """Загрузка данных из активированной сессии"""
-        from io import StringIO
-        import pandas as pd
-
-        self.title = session_data.title
-        self.original_start_date = session_data.original_start_date
-        self.original_num_days = session_data.original_num_days
-        self.custom_dates = [session_data.start_date + timedelta(days=i)
-                             for i in range(session_data.days)]
-
-        # Загрузка данных с обработкой ошибок
-        try:
-            if session_data.schedule_data:
-                self.schedule_df = pd.read_json(StringIO(session_data.schedule_data))
-            if session_data.exams_data:
-                self.exams_df = pd.read_json(StringIO(session_data.exams_data))
-            if session_data.rooms_data:
-                self.rooms_df = pd.read_json(StringIO(session_data.rooms_data))
-            if session_data.faculties_data:
-                self.faculties_df = pd.read_json(StringIO(session_data.faculties_data))
-        except Exception as e:
-            logging.error(f"Ошибка загрузки данных: {str(e)}")
-            raise ValueError(f"Ошибка загрузки данных сессии: {str(e)}")
-
-        self._prepare_data()
 
     def assign_seats(self):
-        """Распределяет студентов по аудиториям с учетом вместимости"""
+        """
+        Распределяет студентов по аудиториям с учетом вместимости
+        и сохраняет информацию о местах в seat_assignments
+        """
         if not hasattr(self, 'schedule_df') or self.schedule_df.empty:
+            logging.warning("Нет данных расписания для распределения мест")
             return
 
-        self.seat_assignments = {}
+        self.seat_assignments = {}  # Очищаем предыдущее распределение
+        total_assigned = 0
+        problem_sections = []
 
+        # Проходим по всем экзаменам в расписании
         for _, exam in self.schedule_df.iterrows():
             try:
-                # Парсим информацию об аудиториях (формат: "230(28) + 233(28)")
-                rooms = []
-                for room_part in exam['Room'].split('+'):
-                    room_info = room_part.strip().split('(')
-                    room_name = room_info[0].strip()
-                    capacity = int(room_info[1].replace(')', '')) if len(room_info) > 1 else 25
-                    rooms.append((room_name, capacity))
-
-                section = exam['Section']
-                students = self.get_students_for_section(section)
-
-                if not students:
+                # Проверяем обязательные поля
+                if not all(
+                        field in exam for field in ['Date', 'Time_Slot', 'Subject', 'Section', 'Room', 'Instructor']):
+                    problem_sections.append(exam.get('Section', 'unknown'))
                     continue
 
-                # Распределяем студентов по аудиториям
+                # Парсим информацию об аудиториях (формат: "230(28) + 233(28)")
+                rooms = []
+                for room_part in str(exam['Room']).split('+'):
+                    try:
+                        room_info = room_part.strip().split('(')
+                        room_name = room_info[0].strip()
+                        capacity = int(room_info[1].replace(')', '')) if len(room_info) > 1 else 25
+                        rooms.append((room_name, capacity))
+                    except Exception as e:
+                        logging.error(f"Ошибка парсинга аудитории '{room_part}': {str(e)}")
+                        continue
+
+                # Получаем список студентов для этой секции
+                students = self.get_students_for_section(exam['Section'])
+                if not students:
+                    logging.warning(f"Нет студентов в секции {exam['Section']}")
+                    continue
+
+                # Распределяем студентов по местам
                 student_index = 0
                 for room_name, capacity in rooms:
                     for seat_num in range(1, capacity + 1):
                         if student_index >= len(students):
                             break
 
-                        student_id = students[student_index]
-                        key = (exam['Date'], exam['Time_Slot'], exam['Subject'], str(student_id))
+                        student_id = str(students[student_index])
+                        exam_date = pd.to_datetime(exam['Date']).date()
+
+                        # Создаем уникальный ключ для этого места
+                        key = f"{exam_date}|{exam['Time_Slot'].strip()}|{exam['Subject'].strip()}|{student_id}"
+
+                        # Сохраняем информацию о месте
                         self.seat_assignments[key] = {
-                            'room': room_name,
                             'seat': seat_num,
-                            'instructor': exam['Instructor']
                         }
+
                         student_index += 1
+                        total_assigned += 1
 
             except Exception as e:
-                logging.error(f"Error assigning seats for section {exam.get('Section', 'unknown')}: {str(e)}")
+                section = exam.get('Section', 'unknown')
+                problem_sections.append(section)
+                logging.error(f"Ошибка распределения мест для секции {section}: {str(e)}")
                 continue
+
+        # Логируем результаты
+        logging.info(f"Успешно распределено мест: {total_assigned}")
+        if problem_sections:
+            logging.warning(f"Проблемы в секциях: {set(problem_sections)}")
+
+        # Пример для отладки
+        if self.seat_assignments:
+            sample_key = next(iter(self.seat_assignments))
+            logging.info(f"Пример распределения: {sample_key} => {self.seat_assignments[sample_key]}")
+
 
 
     def validate_schedule(self):
@@ -994,7 +1060,7 @@ class ExamScheduler:
 
     def get_seat_assignment(self, student_id, exam_date, time_slot, subject):
         """Возвращает информацию о месте студента"""
-        key = (exam_date, time_slot, subject, str(student_id))
+        key = f"{exam_date}|{time_slot}|{subject}|{str(student_id)}"
         return self.seat_assignments.get(key, {'room': 'Not assigned', 'seat': None})
 
     def get_students_for_section(self, section_id):
