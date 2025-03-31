@@ -682,7 +682,7 @@ def register():
     session = Session()
     try:
         # Регистрируем пользователя
-        user = User.register_user(session, email, password, role, full_name)
+        user = User.register_user(session, email, password, full_name, role)
         return jsonify({
             "message": "User registered successfully",
             "user": user.to_dict()
