@@ -897,7 +897,7 @@ class ExamScheduler:
 
         temperature = 10000.0
         cooling_rate = 0.999
-        max_iterations = 2000      # Уменьшаем до 300 итераций
+        max_iterations = 2000
 
         for iteration in range(max_iterations):
             # Полный пересчёт conflict_students для точности
@@ -1090,8 +1090,11 @@ class ExamScheduler:
         # Применяем лучший результат
         self.schedule, student_exams, self.room_usage = best_schedule, best_student_exams, best_room_usage
 
-        # Подсчёт конфликтов после оптимизации
+        # Подсчёт конфликтов после оптимизации и сбор конфликтных студентов
         conflict_count = 0
+        conflict_students_list = []  # Список конфликтных студентов
+        conflict_details = []  # Детали конфликтов для Excel
+
         for student, exams in student_exams.items():
             exams_by_date = defaultdict(list)
             for exam in exams:
@@ -1099,10 +1102,33 @@ class ExamScheduler:
             for date, daily_exams in exams_by_date.items():
                 if len(daily_exams) > 1:
                     conflict_count += 1
+                    conflict_students_list.append(student)
+                    # Собираем информацию о конфликте
+                    conflict_details.append({
+                        'Student_ID': student,
+                        'Conflict_Date': date,
+                        'Exams': '; '.join([f"{exam['Subject']} (Time: {exam['Time_Slot']})" for exam in daily_exams])
+                    })
                     break
 
         logging.info(f"Оптимизация завершена. Лучшая стоимость: {best_cost}")
         logging.info(f"Количество студентов с конфликтами после оптимизации: {conflict_count}")
+        if conflict_students_list:
+            logging.info(f"Список конфликтных студентов: {conflict_students_list}")
+        else:
+            logging.info("Конфликтных студентов нет.")
+
+        # Сохранение конфликтных студентов в Excel
+        if conflict_details:
+            conflict_df = pd.DataFrame(conflict_details)
+            output_file = "conflict_students.xlsx"
+            try:
+                conflict_df.to_excel(output_file, index=False)
+                logging.info(f"Конфликтные студенты сохранены в файл: {output_file}")
+            except Exception as e:
+                logging.error(f"Ошибка при сохранении конфликтных студентов в Excel: {str(e)}")
+        else:
+            logging.info("Нет конфликтных студентов для сохранения в Excel.")
 
         return student_exams
 
