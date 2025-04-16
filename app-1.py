@@ -2,8 +2,13 @@ import tempfile
 import math
 from datetime import datetime
 import traceback
+from sched import scheduler
 from venv import logger
+import json
+
 import bcrypt
+from flask_jwt_extended import jwt_required, get_jwt_identity
+
 from users_db import User
 from flask import Flask, jsonify, send_file
 import logging
@@ -38,76 +43,125 @@ CORS(app)
 # Глобальная переменная для хранения планировщика
 current_scheduler = None
 
-@app.route('/api/proctors/assign', methods=['POST'])
-def assign_proctors():
-    global current_scheduler
-
-    if current_scheduler is None:
-        return jsonify({'error': 'Планировщик не инициализирован'}), 400
-
-    try:
-        proctors_file = request.files['proctors']
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            proctors_path = os.path.join(temp_dir, 'proctors.xlsx')
-            proctors_file.save(proctors_path)
-
-            current_scheduler.assign_proctors(proctors_path)
-
-        # ✅ Добавляем успешный ответ
-        return jsonify({'message': 'Прокторы успешно назначены'}), 200
-
-    except Exception as e:
-        logging.error(f"Ошибка назначения прокторов: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/proctors/save_excel', methods=['GET'])
-def save_proctor_list_excel():
-    if current_scheduler is None:
-        return jsonify({'error': 'Планировщик не инициализирован'}), 400
-
-    try:
-        # Генерация DataFrame с назначениями прокторов
-        section_ids = list(current_scheduler.section_proctors.keys())
-        proctors = list(current_scheduler.section_proctors.values())
-
-        df = pd.DataFrame({
-            'Section': section_ids,
-            'Proctor': proctors
-        })
-
-        # Сохранение в Excel
-        output_path = 'path_to_save_proctors.xlsx'
-        df.to_excel(output_path, index=False)
-
-        return jsonify({'status': f'Прокторы успешно сохранены в {output_path}'}), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
 
 @app.route('/api/init', methods=['POST'])
 def handle_initialization():
+    """Инициализация планировщика с загрузкой файлов."""
     global current_scheduler
 
     try:
-        # 1. Загрузка файлов
+        # 1. Загрузка данных из запроса
         title = request.form.get('title', 'Сезон без имени')
         exams_file = request.files['exams']
         rooms_file = request.files['rooms']
         faculties_file = request.files['faculties']
+        special_exams_file = request.files.get('special_exams')
         start_date = request.form['start_date']
         num_days = int(request.form.get('num_days', 14))
 
-        # 2. Сохранение файлов
+        # Валидация формата даты
+        try:
+            datetime.strptime(start_date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({
+                'status': 'error',
+                'message': 'Некорректный формат даты. Ожидается YYYY-MM-DD'
+            }), 400
+
+        # 2. Сохранение файлов и валидация их структуры
         with tempfile.TemporaryDirectory() as temp_dir:
             exams_path = os.path.join(temp_dir, 'exams.xlsx')
             rooms_path = os.path.join(temp_dir, 'rooms.xlsx')
             faculties_path = os.path.join(temp_dir, 'faculties.xlsx')
+            special_exams_path = os.path.join(temp_dir, 'special_exams.xlsx') if special_exams_file else None
 
+            # Сохраняем файлы
             exams_file.save(exams_path)
             rooms_file.save(rooms_path)
             faculties_file.save(faculties_path)
+            if special_exams_file:
+                special_exams_file.save(special_exams_path)
+
+            # Валидация структуры файлов (заголовки во втором ряду)
+            # exams_file
+            exams_df = pd.read_excel(exams_path)
+            # Логируем первые строки файла для отладки
+            preview = pd.read_excel(exams_path, nrows=3, header=None)
+            logging.info(f"Первые 3 строки exams_file:\n{preview.to_string()}")
+            # Преобразуем все заголовки в строки
+            exams_df.columns = [str(col).strip().strip('"') for col in exams_df.columns]
+            logging.info(f"Очищенные колонки в exams_file: {list(exams_df.columns)}")
+            # Проверяем, что заголовки не являются числами
+            if all(col.isdigit() for col in exams_df.columns):
+                return jsonify({
+                    'status': 'error',
+                    'message': "Заголовки в exams_file не могут быть числами. Ожидаются строковые названия колонок."
+                }), 400
+            required_exams_columns = ['Subject', 'Instructor', 'EduProgram', 'YearsOfStudy', 'Section', 'fake_id']
+            missing_exams_columns = [col for col in required_exams_columns if col not in exams_df.columns]
+            if missing_exams_columns:
+                return jsonify({
+                    'status': 'error',
+                    'message': f"В exams_file отсутствуют обязательные колонки: {missing_exams_columns}"
+                }), 400
+
+            # rooms_file
+            rooms_df = pd.read_excel(rooms_path)
+            preview = pd.read_excel(rooms_path, nrows=3, header=None)
+            logging.info(f"Первые 3 строки rooms_file:\n{preview.to_string()}")
+            rooms_df.columns = [str(col).strip().strip('"') for col in rooms_df.columns]
+            logging.info(f"Очищенные колонки в rooms_file: {list(rooms_df.columns)}")
+            if all(col.isdigit() for col in rooms_df.columns):
+                return jsonify({
+                    'status': 'error',
+                    'message': "Заголовки в rooms_file не могут быть числами. Ожидаются строковые названия колонок."
+                }), 400
+            required_rooms_columns = ['Аудитория', 'Вместительность аудитории']
+            missing_rooms_columns = [col for col in required_rooms_columns if col not in rooms_df.columns]
+            if missing_rooms_columns:
+                return jsonify({
+                    'status': 'error',
+                    'message': f"В rooms_file отсутствуют обязательные колонки: {missing_rooms_columns}"
+                }), 400
+
+            # faculties_file
+            faculties_df = pd.read_excel(faculties_path)
+            preview = pd.read_excel(faculties_path, nrows=3, header=None)
+            logging.info(f"Первые 3 строки faculties_file:\n{preview.to_string()}")
+            faculties_df.columns = [str(col).strip().strip('"') for col in faculties_df.columns]
+            logging.info(f"Очищенные колонки в faculties_file: {list(faculties_df.columns)}")
+            if all(col.isdigit() for col in faculties_df.columns):
+                return jsonify({
+                    'status': 'error',
+                    'message': "Заголовки в faculties_file не могут быть числами. Ожидаются строковые названия колонок."
+                }), 400
+            required_faculties_columns = ['Subject', 'Faculty', 'Instructor']
+            missing_faculties_columns = [col for col in required_faculties_columns if col not in faculties_df.columns]
+            if missing_faculties_columns:
+                return jsonify({
+                    'status': 'error',
+                    'message': f"В faculties_file отсутствуют обязательные колонки: {missing_faculties_columns}"
+                }), 400
+
+            # special_exams_file (если предоставлен)
+            if special_exams_file:
+                special_exams_df = pd.read_excel(special_exams_path, header=1)
+                preview = pd.read_excel(special_exams_path, nrows=3, header=None)
+                logging.info(f"Первые 3 строки special_exams_file:\n{preview.to_string()}")
+                special_exams_df.columns = [str(col).strip().strip('"') for col in special_exams_df.columns]
+                logging.info(f"Очищенные колонки в special_exams_file: {list(special_exams_df.columns)}")
+                if all(col.isdigit() for col in special_exams_df.columns):
+                    return jsonify({
+                        'status': 'error',
+                        'message': "Заголовки в special_exams_file не могут быть числами. Ожидаются строковые названия колонок."
+                    }), 400
+                required_special_columns = ['section_id']
+                missing_special_columns = [col for col in required_special_columns if col not in special_exams_df.columns]
+                if missing_special_columns:
+                    return jsonify({
+                        'status': 'error',
+                        'message': f"В special_exams_file отсутствуют обязательные колонки: {missing_special_columns}"
+                    }), 400
 
             # 3. Инициализация планировщика
             current_scheduler = ExamScheduler(
@@ -115,6 +169,7 @@ def handle_initialization():
                 exams_file=exams_path,
                 rooms_file=rooms_path,
                 faculties_file=faculties_path,
+                special_exams_file=special_exams_path,
                 start_date=start_date,
                 num_days=num_days
             )
@@ -133,7 +188,6 @@ def handle_initialization():
             'status': 'error',
             'message': f'Ошибка инициализации: {str(e)}'
         }), 500
-
 
 @app.route('/api/manage_dates', methods=['POST'])
 def manage_dates():
