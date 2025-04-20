@@ -3,7 +3,6 @@ import math
 import random
 import traceback
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
@@ -1490,12 +1489,12 @@ class ExamScheduler:
         self.schedule_df.to_excel(output_excel, index=False)
         logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
 
-
     def assign_seats(self):
         """
         Распределяет студентов по аудиториям с учетом вместимости
         и сохраняет информацию о местах в seat_assignments
         """
+
         if not hasattr(self, 'schedule_df') or self.schedule_df.empty:
             logging.warning("Нет данных расписания для распределения мест")
             return
@@ -1530,6 +1529,9 @@ class ExamScheduler:
                 if not students:
                     logging.warning(f"Нет студентов в секции {exam['Section']}")
                     continue
+
+                # Перемешиваем студентов для случайного распределения мест
+                random.shuffle(students)
 
                 # Распределяем студентов по местам
                 student_index = 0
