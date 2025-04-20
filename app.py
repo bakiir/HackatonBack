@@ -67,22 +67,34 @@ def save_proctor_list_excel():
         return jsonify({'error': 'Планировщик не инициализирован'}), 400
 
     try:
+        # Логируем содержимое section_proctors для отладки
+        logging.info(f"section_proctors: {current_scheduler.section_proctors}")
+
         # Генерация DataFrame с назначениями прокторов
         section_ids = list(current_scheduler.section_proctors.keys())
-        proctors = list(current_scheduler.section_proctors.values())
+        proctors_data = list(current_scheduler.section_proctors.values())
 
+        # Извлекаем данные с обработкой отсутствующих ключей
+        proctors = [data.get('proctor', None) for data in proctors_data]
+        subjects = [data.get('exam_name', data.get('subject', 'Не указано')) for data in proctors_data]  # Если exam_name отсутствует, берём subject
+        dates = [data.get('date', 'Не указано') for data in proctors_data]  # Если date отсутствует, ставим заглушку
+
+        # Создаём DataFrame с нужными колонками
         df = pd.DataFrame({
             'Section': section_ids,
+            'Subject': subjects,
+            'Date': dates,
             'Proctor': proctors
         })
 
         # Сохранение в Excel
-        output_path = 'path_to_save_proctors.xlsx'
+        output_path = 'proctors_list.xlsx'
         df.to_excel(output_path, index=False)
 
         return jsonify({'status': f'Прокторы успешно сохранены в {output_path}'}), 200
 
     except Exception as e:
+        logging.error(f"Ошибка при сохранении прокторов: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 

@@ -390,7 +390,6 @@ class ExamScheduler:
     from collections import defaultdict, deque
 
     def assign_proctors(self, proctors_path=None):
-
         logging.info("Назначение прокторов.")
         assigned_proctors = []
         section_proctors = {}
@@ -419,29 +418,63 @@ class ExamScheduler:
         # Сортируем для предсказуемости
         available_proctors.sort()
 
+        # Прокторы из ШЦТ
+        sct_proctors = self.faculty_proctors.get('Школа цифровых технологий', [])
+        sct_proctors = [p for p in sct_proctors if p in available_proctors]
+        if not sct_proctors:
+            logging.warning("Нет доступных прокторов из ШЦТ, хотя они могут быть нужны.")
+
+        sct_proctor_index = 0
+        total_sct_proctors = len(sct_proctors) if sct_proctors else 0
+
         proctor_index = 0
         total_proctors = len(available_proctors)
 
         for _, row in self.schedule_df.iterrows():
             section_id = row['Section']
             subject = row['Subject']
+            exam_date = row['Date']
             proctor_needed = row.get('proctor_needed', True)
 
             if not proctor_needed:
+                section_proctors[section_id] = {
+                    'proctor': None,
+                    'subject': subject,
+                    'exam_name': subject,
+                    'date': exam_date
+                }
                 assigned_proctors.append(None)
-                section_proctors[section_id] = {'proctor': None, '-': subject}
                 continue
 
-            assigned = available_proctors[proctor_index % total_proctors]
-            proctor_index += 1
+            # Проверяем, относится ли предмет к ШЦТ
+            is_sct_subject = False
+            subject_faculties = self.subject_faculty_map.get(subject, set())
+            if 'Школа цифровых технологий' in subject_faculties:
+                is_sct_subject = True
+
+            if is_sct_subject:
+                if total_sct_proctors == 0:
+                    logging.error(f"Нет прокторов из ШЦТ для предмета {subject}!")
+                    raise ValueError(f"Нет прокторов из ШЦТ для предмета {subject}!")
+                assigned = sct_proctors[sct_proctor_index % total_sct_proctors]
+                sct_proctor_index += 1
+            else:
+                assigned = available_proctors[proctor_index % total_proctors]
+                proctor_index += 1
 
             assigned_proctors.append(assigned)
-            section_proctors[section_id] = {'proctor': assigned, '-': subject}
+            section_proctors[section_id] = {
+                'proctor': assigned,
+                'subject': subject,
+                'exam_name': subject,
+                'date': exam_date
+            }
 
         # Сохраняем в DataFrame и объект
         self.schedule_df['Proctor'] = assigned_proctors
         self.section_proctors = section_proctors
 
+        logging.info(f"section_proctors после назначения: {self.section_proctors}")
         logging.info("Прокторы успешно назначены.")
 
     def get_all_proctors(self):
