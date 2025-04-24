@@ -414,20 +414,20 @@ class ExamScheduler:
         if not available_proctors:
             raise ValueError("Нет доступных прокторов для назначения.")
 
-        # Сортируем для предсказуемости
-        available_proctors.sort()
-
         # Прокторы из ШЦТ
         sct_proctors = self.faculty_proctors.get('Школа цифровых технологий', [])
         sct_proctors = [p for p in sct_proctors if p in available_proctors]
         if not sct_proctors:
             logging.warning("Нет доступных прокторов из ШЦТ, хотя они могут быть нужны.")
 
-        sct_proctor_index = 0
-        total_sct_proctors = len(sct_proctors) if sct_proctors else 0
+        # Прокторы НЕ из ШЦТ
+        non_sct_proctors = [p for p in available_proctors if p not in sct_proctors]
+        if not non_sct_proctors:
+            logging.warning("Нет доступных прокторов вне ШЦТ, хотя они могут быть нужны.")
 
-        proctor_index = 0
-        total_proctors = len(available_proctors)
+        # Инициализируем словари для отслеживания нагрузки
+        sct_proctor_load = {proctor: 0 for proctor in sct_proctors}
+        non_sct_proctor_load = {proctor: 0 for proctor in non_sct_proctors}
 
         for _, row in self.schedule_df.iterrows():
             section_id = row['Section']
@@ -452,14 +452,19 @@ class ExamScheduler:
                 is_sct_subject = True
 
             if is_sct_subject:
-                if total_sct_proctors == 0:
+                # Назначаем проктора из ШЦТ с минимальной нагрузкой
+                if not sct_proctor_load:
                     logging.error(f"Нет прокторов из ШЦТ для предмета {subject}!")
                     raise ValueError(f"Нет прокторов из ШЦТ для предмета {subject}!")
-                assigned = sct_proctors[sct_proctor_index % total_sct_proctors]
-                sct_proctor_index += 1
+                assigned = min(sct_proctor_load, key=sct_proctor_load.get)  # Проктор с минимальной нагрузкой
+                sct_proctor_load[assigned] += 1  # Увеличиваем нагрузку
             else:
-                assigned = available_proctors[proctor_index % total_proctors]
-                proctor_index += 1
+                # Назначаем проктора НЕ из ШЦТ с минимальной нагрузкой
+                if not non_sct_proctor_load:
+                    logging.error(f"Нет прокторов вне ШЦТ для предмета {subject}!")
+                    raise ValueError(f"Нет прокторов вне ШЦТ для предмета {subject}!")
+                assigned = min(non_sct_proctor_load, key=non_sct_proctor_load.get)  # Проктор с минимальной нагрузкой
+                non_sct_proctor_load[assigned] += 1  # Увеличиваем нагрузку
 
             assigned_proctors.append(assigned)
             section_proctors[section_id] = {
@@ -473,6 +478,9 @@ class ExamScheduler:
         self.schedule_df['Proctor'] = assigned_proctors
         self.section_proctors = section_proctors
 
+        # Логируем нагрузку прокторов для отладки
+        logging.info(f"Нагрузка прокторов ШЦТ: {sct_proctor_load}")
+        logging.info(f"Нагрузка прокторов вне ШЦТ: {non_sct_proctor_load}")
         logging.info(f"section_proctors после назначения: {self.section_proctors}")
         logging.info("Прокторы успешно назначены.")
 
@@ -1367,7 +1375,6 @@ class ExamScheduler:
                 print("Пожалуйста, введите число")
 
 
-
     def delete_subject_groups(self, subject):
 
         logging.info(f"Поиск групп для предмета: {subject}")
@@ -1489,6 +1496,7 @@ class ExamScheduler:
         self.schedule_df.to_excel(output_excel, index=False)
         logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
 
+
     def assign_seats(self):
         """
         Распределяет студентов по аудиториям с учетом вместимости
@@ -1569,7 +1577,6 @@ class ExamScheduler:
         if self.seat_assignments:
             sample_key = next(iter(self.seat_assignments))
             logging.info(f"Пример распределения: {sample_key} => {self.seat_assignments[sample_key]}")
-
 
 
     def validate_schedule(self):
