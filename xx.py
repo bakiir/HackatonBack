@@ -956,8 +956,8 @@ class ExamScheduler:
         best_cost = current_cost
 
         temperature = 10000.0
-        cooling_rate = 0.999
-        max_iterations = 2000
+        cooling_rate = 0.995
+        max_iterations = 2500
 
         for iteration in range(max_iterations):
             conflict_students = set()
