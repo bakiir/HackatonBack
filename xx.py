@@ -906,12 +906,10 @@ class ExamScheduler:
         # Функция для подсчёта стоимости (число студентов с конфликтами)
         def calculate_cost(student_exams, changed_students=None):
             conflict_count = 0
-
             if changed_students is not None:
                 students_to_check = changed_students
             else:
                 students_to_check = student_exams.keys()
-
             for student in students_to_check:
                 exams = student_exams[student]
                 exams_by_date = defaultdict(list)
@@ -921,7 +919,6 @@ class ExamScheduler:
                     if len(daily_exams) > 1:
                         conflict_count += 1
                         break
-
             return conflict_count * 1000
 
         # Основной алгоритм simulated annealing
@@ -963,7 +960,6 @@ class ExamScheduler:
         max_iterations = 2000
 
         for iteration in range(max_iterations):
-            # Полный пересчёт conflict_students для точности
             conflict_students = set()
             for student, exams in current_student_exams.items():
                 exams_by_date = defaultdict(list)
@@ -978,7 +974,6 @@ class ExamScheduler:
                 logging.info("Все конфликты устранены. Завершаем оптимизацию.")
                 break
 
-            # Случайно выбираем экзамен, пока не найдём конфликтный
             max_attempts = 10
             attempt = 0
             while attempt < max_attempts:
@@ -1039,7 +1034,6 @@ class ExamScheduler:
                         delta += 1
                 delta_conflicts[new_day] = delta
 
-            # Перебираем только 3 лучших дня
             sorted_new_days = sorted(self.custom_dates, key=lambda d: delta_conflicts[d])[:3]
             found_slot = False
 
@@ -1177,23 +1171,24 @@ class ExamScheduler:
         logging.info(f"Оптимизация завершена. Лучшая стоимость: {best_cost}")
         logging.info(f"Количество студентов с конфликтами после оптимизации: {conflict_count}")
         if conflict_students_list:
-            logging.info(f"Список конфликтных студентов: {conflict_students_list}")
+            logging.info(f"Список конфликтных студентов после оптимизации: {conflict_students_list}")
         else:
-            logging.info("Конфликтных студентов нет.")
+            logging.info("Конфликтных студентов после оптимизации нет.")
 
         # Сохранение конфликтных студентов в Excel
         if conflict_details:
             conflict_df = pd.DataFrame(conflict_details)
-            output_file = "conflict_students.xlsx"
+            output_file = "conflict_students_after_optimization.xlsx"
             try:
                 conflict_df.to_excel(output_file, index=False)
-                logging.info(f"Конфликтные студенты сохранены в файл: {output_file}")
+                logging.info(f"Конфликтные студенты после оптимизации сохранены в файл: {output_file}")
             except Exception as e:
                 logging.error(f"Ошибка при сохранении конфликтных студентов в Excel: {str(e)}")
         else:
-            logging.info("Нет конфликтных студентов для сохранения в Excel.")
+            logging.info("Нет конфликтных студентов после оптимизации для сохранения в Excel.")
 
-        return student_exams
+        # Возвращаем student_exams и список конфликтных студентов
+        return student_exams, conflict_students_list
 
     def _log_schedule_stats(self):
         if self.schedule_df.empty:
