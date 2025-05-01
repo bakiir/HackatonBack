@@ -846,6 +846,31 @@ def update_proctor_status():
         }), 500
 
 
+@app.route('/api/update_room_requirement', methods=['POST'])
+def update_room_requirement():
+    global current_scheduler
+    try:
+        data = request.json
+        if not data or 'exams' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Не предоставлены данные об экзаменах'
+            }), 400
+        for exam in data['exams']:
+            section_id = exam.get('section_id')
+            two_rooms_needed = exam.get('two_rooms_needed', False)
+            current_scheduler.update_room_requirement(section_id, two_rooms_needed)
+        return jsonify({
+            'status': 'success',
+            'message': 'Требования к аудиториям успешно обновлены'
+        }), 200
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении требований к аудиториям: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Ошибка при обновлении требований к аудиториям: {str(e)}'
+        }), 500
+
 @app.route('/api/upload-students', methods=['POST'])
 def upload_students():
     if 'file' not in request.files:
