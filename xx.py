@@ -1,6 +1,7 @@
 import json
 import math
 import random
+import statistics
 import traceback
 from collections import defaultdict
 from itertools import combinations
@@ -392,7 +393,6 @@ class ExamScheduler:
             logging.error(f"Ошибка при поиске секций: {str(e)}")
             return pd.DataFrame()
 
-    from collections import defaultdict, deque
 
 
     def assign_proctors(self, proctors_path=None):
@@ -432,14 +432,36 @@ class ExamScheduler:
         if not non_sct_proctors:
             logging.warning("Нет доступных прокторов вне ШЦТ, хотя они могут быть нужны.")
 
+        # Подсчет экзаменов для каждой школы
+        faculty_exams = {faculty: 0 for faculty in self.faculty_proctors.keys()}
+        for _, row in self.schedule_df.iterrows():
+            subject = row['Subject']
+            proctor_needed = row.get('proctor_needed', True)
+            if not proctor_needed:
+                continue
+            faculties = self.subject_faculty_map.get(subject, set())
+            for faculty in faculties:
+                num_proctors = 4 if '107' in row['Room'] else (2 if row.get('two_rooms_needed', False) else 1)
+                faculty_exams[faculty] += num_proctors
+
+        # Выводим количество прокторов и экзаменов для каждой школы
+        logging.info("Информация о прокторах и экзаменах по школам:")
+        for faculty, proctors in self.faculty_proctors.items():
+            valid_proctors = [p for p in proctors if p in available_proctors]
+            logging.info(f"{faculty}: {len(valid_proctors)} прокторов, {faculty_exams[faculty]} мест для прокторов")
+
         # Инициализируем словари для отслеживания нагрузки
         sct_proctor_load = {proctor: 0 for proctor in sct_proctors}
         non_sct_proctor_load = {proctor: 0 for proctor in non_sct_proctors}
+
+        # Максимальная нагрузка на проктора
+        MAX_PROCTOR_LOAD = 10
 
         for _, row in self.schedule_df.iterrows():
             section_id = row['Section']
             subject = row['Subject']
             exam_date = row['Date']
+            room = row['Room']
             proctor_needed = row.get('proctor_needed', True)
 
             # Получаем информацию о two_rooms_needed из exam_groups
@@ -457,7 +479,14 @@ class ExamScheduler:
                 continue
 
             # Определяем количество прокторов
-            num_proctors = 2 if two_rooms_needed else 1
+            if '107' in room:
+                num_proctors = 4
+                logging.info(f"Для {section_id} в аудитории {room} требуется 4 проктора")
+            elif two_rooms_needed:
+                num_proctors = 2
+                logging.info(f"Для {section_id} с two_rooms_needed=True требуется 2 проктора")
+            else:
+                num_proctors = 1
 
             # Проверяем, относится ли предмет к ШЦТ
             is_sct_subject = False
@@ -466,39 +495,83 @@ class ExamScheduler:
                 is_sct_subject = True
 
             assigned = []
-            proctor_load = sct_proctor_load if is_sct_subject else non_sct_proctor_load
-            proctor_pool = sct_proctors if is_sct_subject else non_sct_proctors
+            if is_sct_subject:
+                proctor_pool = sct_proctors
+                proctor_load = sct_proctor_load
+                logging.info(f"Для {section_id} (ШЦТ) выбираем прокторов из ШЦТ")
+            else:
+                excluded_faculties = subject_faculties | {'Школа цифровых технологий'}
+                proctor_pool = [
+                    p for p in non_sct_proctors
+                    if not any(p in self.faculty_proctors.get(faculty, []) for faculty in excluded_faculties)
+                ]
+                proctor_load = non_sct_proctor_load
+                logging.info(f"Для {section_id} исключаем прокторов из {excluded_faculties}")
 
             if not proctor_pool:
-                logging.error(f"Нет прокторов {'из ШЦТ' if is_sct_subject else 'вне ШЦТ'} для предмета {subject}!")
-                raise ValueError(f"Нет прокторов {'из ШЦТ' if is_sct_subject else 'вне ШЦТ'} для предмета {subject}!")
+                logging.error(
+                    f"Нет доступных прокторов для {section_id}: предмет {subject}, исключены {excluded_faculties}")
+                raise ValueError(f"Нет доступных прокторов для {section_id}")
 
-            # Выбираем прокторов с минимальной нагрузкой
-            available = sorted(proctor_pool, key=lambda p: proctor_load[p])
+            # Фильтруем прокторов с нагрузкой ниже максимальной
+            available = [p for p in proctor_pool if proctor_load[p] < MAX_PROCTOR_LOAD]
+            if not available:
+                logging.error(f"Все прокторы для {section_id} превысили максимальную нагрузку {MAX_PROCTOR_LOAD}")
+                raise ValueError(f"Нет прокторов с нагрузкой ниже {MAX_PROCTOR_LOAD} для {section_id}")
+
+            # Вероятностный выбор прокторов с усиленными весами
             if len(available) < num_proctors:
                 logging.warning(
                     f"Недостаточно прокторов для {section_id}: требуется {num_proctors}, доступно {len(available)}")
-                assigned = available[:num_proctors]  # Назначаем, сколько есть
+                assigned = available[:num_proctors]
             else:
-                assigned = available[:num_proctors]  # Берем нужное количество
+                max_load = max(proctor_load[p] for p in available) + 1
+                weights = [(max_load - proctor_load[p]) ** 2 for p in available]  # Усиливаем веса
+                assigned = random.choices(available, weights=weights, k=num_proctors)
+                assigned = list(dict.fromkeys(assigned))[:num_proctors]
+                while len(assigned) < num_proctors:
+                    remaining = [p for p in available if p not in assigned]
+                    if not remaining:
+                        break
+                    weights = [(max_load - proctor_load[p]) ** 2 for p in remaining]
+                    extra = random.choices(remaining, weights=weights, k=1)[0]
+                    assigned.append(extra)
 
             for proctor in assigned:
                 proctor_load[proctor] += 1
+                if proctor_load[proctor] >= MAX_PROCTOR_LOAD:
+                    logging.warning(f"Проктор {proctor} достиг максимальной нагрузки {MAX_PROCTOR_LOAD}")
 
             # Формируем строку для столбца Proctor
             proctor_str = ', '.join(assigned) if assigned else ''
             assigned_proctors.append(proctor_str)
 
             section_proctors[section_id] = {
-                'proctor': assigned,  # Список прокторов
+                'proctor': assigned,
                 'subject': subject,
                 'exam_name': subject,
                 'date': exam_date
             }
 
-            if two_rooms_needed:
-                logging.info(
-                    f"Для {section_id} с two_rooms_needed=True назначено {len(assigned)} прокторов: {proctor_str}")
+        # Логируем статистику нагрузки
+        sct_loads = [v for v in sct_proctor_load.values() if v > 0]
+        non_sct_loads = [v for v in non_sct_proctor_load.values() if v > 0]
+        logging.info(f"Средняя нагрузка на проктора ШЦТ: {statistics.mean(sct_loads) if sct_loads else 0:.2f}")
+        logging.info(
+            f"Средняя нагрузка на проктора вне ШЦТ: {statistics.mean(non_sct_loads) if non_sct_loads else 0:.2f}")
+
+        # Статистика по всем школам
+        logging.info("Нагрузка прокторов по школам:")
+        for faculty, proctors in self.faculty_proctors.items():
+            faculty_loads = [
+                sct_proctor_load.get(p, non_sct_proctor_load.get(p, 0))
+                for p in proctors if p in available_proctors
+            ]
+            if faculty_loads:
+                logging.info(f"{faculty}: средняя нагрузка {statistics.mean(faculty_loads):.2f}, "
+                             f"мин {min(faculty_loads)}, макс {max(faculty_loads)}, "
+                             f"{len([p for p in proctors if p in available_proctors])} прокторов, "
+                             f"{faculty_exams[faculty]} мест для прокторов")
 
         # Сохраняем в DataFrame и объект
         self.schedule_df['Proctor'] = assigned_proctors
@@ -509,8 +582,6 @@ class ExamScheduler:
         logging.info(f"Нагрузка прокторов вне ШЦТ: {non_sct_proctor_load}")
         logging.info(f"section_proctors после назначения: {self.section_proctors}")
         logging.info("Прокторы успешно назначены.")
-
-
 
     def get_all_proctors(self):
 
