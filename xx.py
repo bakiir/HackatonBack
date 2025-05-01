@@ -394,22 +394,14 @@ class ExamScheduler:
 
     from collections import defaultdict, deque
 
-    def assign_proctors(self, proctors_path=None):
-        """
-        Назначает прокторов на экзамены, учитывая их доступность и требования к количеству прокторов.
 
-        Args:
-            proctors_path (str, optional): Путь к файлу Excel с информацией о непрокторах.
-        """
+    def assign_proctors(self, proctors_path=None):
         logging.info("Назначение прокторов.")
         assigned_proctors = []
         section_proctors = {}
-        proctor_assignments = {
-            day: {slot: set() for slot in self.time_slots}
-            for day in self.custom_dates
-        }
 
         non_proctors = []
+
         if proctors_path:
             non_proctors_df = pd.read_excel(proctors_path, header=3)
             non_proctors = non_proctors_df['ФИО'].dropna().tolist()
@@ -448,27 +440,24 @@ class ExamScheduler:
             section_id = row['Section']
             subject = row['Subject']
             exam_date = row['Date']
-            exam_time = row['Time']
-            proctor_needed = self.exam_groups.loc[
-                self.exam_groups['Section'] == section_id, 'proctor_needed'
-            ].iloc[0] if 'proctor_needed' in self.exam_groups.columns else True
-            two_rooms_needed = self.exam_groups.loc[
-                self.exam_groups['Section'] == section_id, 'two_rooms_needed'
-            ].iloc[0] if 'two_rooms_needed' in self.exam_groups.columns else False
+            proctor_needed = row.get('proctor_needed', True)
+
+            # Получаем информацию о two_rooms_needed из exam_groups
+            group = self.exam_groups[self.exam_groups['Section'] == section_id]
+            two_rooms_needed = group['two_rooms_needed'].iloc[0] if not group.empty else False
 
             if not proctor_needed:
                 section_proctors[section_id] = {
-                    'proctors': [],
+                    'proctor': [],
                     'subject': subject,
                     'exam_name': subject,
                     'date': exam_date
                 }
-                assigned_proctors.append(None)
+                assigned_proctors.append('')
                 continue
 
-            # Определяем количество необходимых прокторов
+            # Определяем количество прокторов
             num_proctors = 2 if two_rooms_needed else 1
-            current_assigned_proctors = []
 
             # Проверяем, относится ли предмет к ШЦТ
             is_sct_subject = False
@@ -476,52 +465,40 @@ class ExamScheduler:
             if 'Школа цифровых технологий' in subject_faculties:
                 is_sct_subject = True
 
-            # Получаем доступных прокторов для данного временного слота
-            current_available_proctors = (
-                [p for p in sct_proctors if p not in proctor_assignments[exam_date][exam_time]]
-                if is_sct_subject else
-                [p for p in non_sct_proctors if p not in proctor_assignments[exam_date][exam_time]]
-            )
-            proctor_load_dict = sct_proctor_load if is_sct_subject else non_sct_proctor_load
+            assigned = []
+            proctor_load = sct_proctor_load if is_sct_subject else non_sct_proctor_load
+            proctor_pool = sct_proctors if is_sct_subject else non_sct_proctors
 
-            if not current_available_proctors:
-                logging.error(f"Нет доступных прокторов для {section_id} в {exam_date} {exam_time}!")
-                section_proctors[section_id] = {
-                    'proctors': [],
-                    'subject': subject,
-                    'exam_name': subject,
-                    'date': exam_date
-                }
-                assigned_proctors.append(None)
-                continue
+            if not proctor_pool:
+                logging.error(f"Нет прокторов {'из ШЦТ' if is_sct_subject else 'вне ШЦТ'} для предмета {subject}!")
+                raise ValueError(f"Нет прокторов {'из ШЦТ' if is_sct_subject else 'вне ШЦТ'} для предмета {subject}!")
 
-            # Назначаем нужное количество прокторов
-            for _ in range(num_proctors):
-                if not current_available_proctors:
-                    logging.warning(
-                        f"Недостаточно прокторов для {section_id}: требуется {num_proctors}, назначено {len(current_assigned_proctors)}")
-                    break
-                # Выбираем проктора с минимальной нагрузкой
-                assigned = min(
-                    current_available_proctors,
-                    key=lambda p: proctor_load_dict[p],
-                    default=None
-                )
-                if assigned:
-                    current_assigned_proctors.append(assigned)
-                    proctor_load_dict[assigned] += 1
-                    proctor_assignments[exam_date][exam_time].add(assigned)
-                    current_available_proctors.remove(assigned)
+            # Выбираем прокторов с минимальной нагрузкой
+            available = sorted(proctor_pool, key=lambda p: proctor_load[p])
+            if len(available) < num_proctors:
+                logging.warning(
+                    f"Недостаточно прокторов для {section_id}: требуется {num_proctors}, доступно {len(available)}")
+                assigned = available[:num_proctors]  # Назначаем, сколько есть
+            else:
+                assigned = available[:num_proctors]  # Берем нужное количество
 
-            # Формируем строку для schedule_df
-            proctor_str = ", ".join(current_assigned_proctors) if current_assigned_proctors else None
+            for proctor in assigned:
+                proctor_load[proctor] += 1
+
+            # Формируем строку для столбца Proctor
+            proctor_str = ', '.join(assigned) if assigned else ''
+            assigned_proctors.append(proctor_str)
+
             section_proctors[section_id] = {
-                'proctors': current_assigned_proctors,
+                'proctor': assigned,  # Список прокторов
                 'subject': subject,
                 'exam_name': subject,
                 'date': exam_date
             }
-            assigned_proctors.append(proctor_str)
+
+            if two_rooms_needed:
+                logging.info(
+                    f"Для {section_id} с two_rooms_needed=True назначено {len(assigned)} прокторов: {proctor_str}")
 
         # Сохраняем в DataFrame и объект
         self.schedule_df['Proctor'] = assigned_proctors
@@ -532,6 +509,8 @@ class ExamScheduler:
         logging.info(f"Нагрузка прокторов вне ШЦТ: {non_sct_proctor_load}")
         logging.info(f"section_proctors после назначения: {self.section_proctors}")
         logging.info("Прокторы успешно назначены.")
+
+
 
     def get_all_proctors(self):
 
