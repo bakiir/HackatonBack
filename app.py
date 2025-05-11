@@ -856,14 +856,19 @@ def update_room_requirement():
                 'status': 'error',
                 'message': 'Не предоставлены данные об экзаменах'
             }), 400
+
         for exam in data['exams']:
             section_id = exam.get('section_id')
-            two_rooms_needed = exam.get('two_rooms_needed', False)
+            # Используем has_room вместо two_rooms_needed
+            two_rooms_needed = exam.get('has_room', False)
+            logging.info(f"Обновлено требование к аудиториям для {section_id}: two_rooms_needed={two_rooms_needed}")
             current_scheduler.update_room_requirement(section_id, two_rooms_needed)
+
         return jsonify({
             'status': 'success',
             'message': 'Требования к аудиториям успешно обновлены'
         }), 200
+
     except Exception as e:
         logging.error(f"Ошибка при обновлении требований к аудиториям: {str(e)}")
         return jsonify({
@@ -1058,11 +1063,6 @@ def handle_update_durations():
             'status': 'error',
             'message': f'Ошибка при обновлении длительностей: {str(e)}'
         }), 500
-
-# @app.route('/schedule/student/<student_id>')
-# def get_student_schedule(student_id):
-#     student_schedule = scheduler.get_student_sections(student_id)
-#     return jsonify(student_schedule.to_dict('records'))
 
 
 if __name__ == '__main__':
