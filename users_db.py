@@ -1,3 +1,4 @@
+from flask_jwt_extended import create_access_token
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import declarative_base, sessionmaker
 import bcrypt
@@ -34,7 +35,7 @@ class User(Base):
     @classmethod
     def login_user(cls, session, email, password):
         """
-        Аутентификация пользователя и генерация JWT токена
+        Аутентификация пользователя и генерация JWT токена (совместимая с flask_jwt_extended)
         """
         user = session.query(cls).filter_by(email=email).first()
         if not user:
@@ -43,16 +44,12 @@ class User(Base):
         if not bcrypt.checkpw(password.encode('utf-8'), user.password.encode('utf-8')):
             return None
 
-        token_data = {
-            "sub": str(user.id),
-            "role": user.role,
-            "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        }
-        access_token = jwt.encode(
-            token_data,
-            SECRET_KEY,
-            algorithm=ALGORITHM
+        # ✅ Токен, совместимый с flask_jwt_extended
+        access_token = create_access_token(
+            identity=str(user.id),
+            additional_claims={"role": user.role}
         )
+
         return {"user": user.to_dict(), "access_token": access_token}
 
     @classmethod

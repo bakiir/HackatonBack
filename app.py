@@ -1,9 +1,12 @@
 import tempfile
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 import traceback
 from venv import logger
 import bcrypt
+from flask_jwt_extended import JWTManager, jwt_required
+
+from jwt_service import role_required
 from users_db import User
 from flask import Flask, jsonify, send_file
 import logging
@@ -34,11 +37,19 @@ def handle_nan_values(obj):
 
 
 app = Flask(__name__)
+
+app.config["JWT_SECRET_KEY"] = "your-secret-key"  # тот же, что и в модели
+app.config["JWT_TOKEN_LOCATION"] = ["headers"]     # обязательно!
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=30)
+
+jwt = JWTManager(app)
+
 CORS(app)
 # Глобальная переменная для хранения планировщика
 current_scheduler = None
 
 @app.route('/api/proctors/assign', methods=['POST'])
+@role_required("admin")
 def assign_proctors():
     global current_scheduler
 
@@ -99,6 +110,7 @@ def save_proctor_list_excel():
 
 
 @app.route('/api/init', methods=['POST'])
+@role_required("admin")
 def handle_initialization():
     global current_scheduler
 
@@ -148,6 +160,7 @@ def handle_initialization():
 
 
 @app.route('/api/manage_dates', methods=['POST'])
+@role_required("admin")
 def manage_dates():
     global current_scheduler
 
@@ -319,6 +332,7 @@ def handle_management():
 
 # Получить список сессий
 @app.route('/api/sessions', methods=['GET'])
+@role_required("admin")
 def get_all_sessions():
     db_session = Session()
     try:
@@ -346,6 +360,7 @@ def get_all_sessions():
 
 
 @app.route('/api/sessions/<int:session_id>/data', methods=['GET'])
+@role_required("admin")
 def get_data_by_id(session_id):
     db_session = Session()
     try:
@@ -365,6 +380,7 @@ def get_data_by_id(session_id):
 
 # Получить детали конкретной сессии
 @app.route('/api/sessions/<int:session_id>', methods=['GET'])
+@role_required("admin")
 def get_session_details(session_id):
     db_session = Session()
     try:
@@ -380,6 +396,7 @@ def get_session_details(session_id):
 
 
 @app.route('/api/sessions/<int:session_id>/activate', methods=['POST'])
+@role_required("admin")
 def activate_session(session_id):
     db_session = Session()
     try:
@@ -418,6 +435,7 @@ def activate_session(session_id):
 
 
 @app.route('/api/sessions/<int:session_id>', methods=['DELETE'])
+@role_required("admin")
 def delete_session(session_id):
     db = Session()
     try:
@@ -537,6 +555,7 @@ def get_subject_groups(subject):
 
 
 @app.route('/subjects/<subject>/delete', methods=['DELETE'])
+@role_required("admin")
 def delete_subject(subject):
     try:
         subject_groups = current_scheduler.exam_groups[current_scheduler.exam_groups['Subject'] == subject]
@@ -565,6 +584,7 @@ def delete_subject(subject):
 
 
 @app.route('/subjects/<subject>/sections/<section>', methods=['DELETE'])
+@role_required("admin")
 def delete_section(subject, section):
     try:
         subject_groups = current_scheduler.exam_groups[current_scheduler.exam_groups['Subject'] == subject]
@@ -618,6 +638,7 @@ def get_available_rooms(day, time_slot):
 
 
 @app.route('/schedule/edit/<string:section>', methods=['POST'])
+@role_required("admin")
 def edit_schedule(section):
     logging.info(f"Получен запрос на редактирование секции: {section}")
 
@@ -697,28 +718,6 @@ def get_available_proctors(date, time_slot):
         logging.error(f"Ошибка в get_available_proctors: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Внутренняя ошибка сервера'}), 500
 
-# only for testing
-@app.route('/api/protected', methods=['GET'])
-def protected():
-        """
-        Защищённый эндпоинт, доступный только с валидным JWT-токеном.
-        """
-        token = request.headers.get("Authorization")
-        if not token:
-            return jsonify({"error": "Токен отсутствует"}), 401
-
-        # Убираем префикс "Bearer " из токена
-        if token.startswith("Bearer "):
-            token = token.split(" ")[1]
-
-        payload = jwt_service.decode_access_token(token)
-        if not payload:
-            return jsonify({"error": "Неверный токен"}), 401
-
-        user_id = payload.get("sub")
-        role = payload.get("role")
-        return jsonify({"message": f"Доступ разрешён для пользователя {user_id} с ролью {role}"}), 200
-
 @app.route('/api/register', methods=['POST'])
 def register():
     """
@@ -771,7 +770,10 @@ def login():
     finally:
         user_session.close()
 
-
+@app.route('/api/protected', methods=['GET'])
+@jwt_required()
+def protected():
+    return jsonify({"msg": "Access granted"})
 
 @app.route('/api/update_exam_status', methods=['POST'])
 def update_exam_status():
@@ -815,6 +817,7 @@ def update_exam_status():
 
 
 @app.route('/api/update_proctor_status', methods=['POST'])
+@role_required("admin")
 def update_proctor_status():
     global current_scheduler
 
@@ -847,6 +850,7 @@ def update_proctor_status():
 
 
 @app.route('/api/update_room_requirement', methods=['POST'])
+@role_required("admin")
 def update_room_requirement():
     global current_scheduler
     try:
@@ -877,6 +881,7 @@ def update_room_requirement():
         }), 500
 
 @app.route('/api/upload-students', methods=['POST'])
+@role_required("admin")
 def upload_students():
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
