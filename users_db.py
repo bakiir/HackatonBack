@@ -96,6 +96,16 @@ class User(Base):
         return user
 
     @classmethod
+    def delete_user(cls, session, user_id):
+        user = session.query(cls).filter_by(id=user_id).first()
+        if not user:
+            raise ValueError("Пользователь не найден")
+
+        session.delete(user)
+        session.commit()
+        return True
+
+    @classmethod
     def get_by_email(cls, session, email):
         """
         Получение пользователя по email

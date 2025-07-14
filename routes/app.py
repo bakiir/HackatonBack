@@ -803,6 +803,24 @@ def update_user(user_id):
         session.close()
 
 
+@app.route('/api/delete-user/<int:user_id>', methods=['DELETE'])
+@admin_required("admin")  # Или @admin_required("admin") — твой декоратор
+def delete_user(user_id):
+    session = Session()
+    try:
+        User.delete_user(session, user_id)
+        return jsonify({"message": "Пользователь успешно удалён"}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Ошибка при удалении: {str(e)}"}), 500
+    finally:
+        session.close()
+
+
+
 @app.route('/api/login', methods=['POST'])
 def login():
     user_session = Session()
