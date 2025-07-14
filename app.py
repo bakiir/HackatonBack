@@ -1,5 +1,6 @@
 import tempfile
 import math
+from crypt import methods
 from datetime import datetime, timedelta
 import traceback
 from venv import logger
@@ -1232,6 +1233,15 @@ def handle_update_durations():
             'status': 'error',
             'message': f'Ошибка при обновлении длительностей: {str(e)}'
         }), 500
+
+
+@app.route("/api/init-admins", methods=["GET"])
+def init_admins():
+    User.register_user(session, "admin@narxoz.kz", "$2b$12$JUq7srHZ7R1K7O.JTwwA5O.1nnG.rOzo/EJXUOnBUzOiAvqo/A3jq", "main-admin", "admin");
+    User.register_user(session, "admin-sdt@narxoz.kz", "$2b$12$ndPEvt8.2F1SVS/VnRxaQ.k3CGDmo3Z5q7WNmjE3bJ2ibSoziRMOm", "admin-sdt", "admin-sdt");
+    User.register_user(session, "admin-sem@narxoz.kz", "$2b$12$GR3GImCR1q.i1OdxqOE5i.CvPK/YNGK0LF1/7/iRVWLa3vTbVMWc6", "admin-sem", "admin-sem");
+    User.register_user(session, "admin-gum@narxoz.kz", "$2b$12$Uy62OZWQ6cNOcIaVrYO.Kusnxo03KDC5YL4RB3b.X9a57De8HF9Fy", "admin-gum", "admin-gum");
+    User.register_user(session, "admin-spigu@narxoz.kz", "$2b$12$pn/XytpaJot3y/dz5gBHdunvPHFrprGptvhHbI4MU7ugtQS2/hLEa", "admin-spigu", "admin-spigu");
 
 
 # if __name__ == '__main__':
