@@ -57,7 +57,6 @@ class ExamScheduler:
         # Добавляем поле has_exam, если его нет
         if 'has_exam' not in self.exam_groups.columns:
             self.exam_groups['has_exam'] = True
-
         # Если переданы данные сессии, загружаем их
         if session_data:
             self._load_from_session(session_data)
@@ -262,6 +261,29 @@ class ExamScheduler:
         total_slots = len(self.rooms) * len(self.time_slots) * self.original_num_days
         logging.info(f"Всего экзаменов: {len(self.exam_groups)}")
         logging.info(f"Всего временных слотов: {total_slots}")
+
+    def get_by_faculty(self, faculty):
+        """
+        Возвращает список уникальных предметов (Subject) для указанного факультета (Faculty).
+
+        :param faculty: Название факультета (например, 'Школа экономики и менеджмента')
+        :return: Список уникальных предметов
+        """
+        logging.info(f"Получение списка предметов для факультета: {faculty}")
+
+        if not hasattr(self, 'subject_faculty_map') or not self.subject_faculty_map:
+            logging.error("subject_faculty_map не инициализирован или пуст")
+            return []
+
+        try:
+            # Ищем предметы, у которых указанный факультет есть в множестве факультетов
+            subjects = [subject for subject, faculties in self.subject_faculty_map.items() if faculty in faculties]
+            subjects = sorted(subjects)  # Сортируем для консистентности
+            logging.info(f"Найдено {len(subjects)} уникальных предметов для факультета {faculty}")
+            return subjects
+        except Exception as e:
+            logging.error(f"Ошибка при получении предметов для факультета {faculty}: {str(e)}")
+            return []
 
     def update_room_requirement(self, section_id, two_rooms_needed):
         if section_id not in self.exam_groups['Section'].values:

@@ -4,10 +4,7 @@ from datetime import datetime, timedelta
 import traceback
 from venv import logger
 import bcrypt
-from flask_jwt_extended import JWTManager, jwt_required
-from openpyxl.descriptors import Integer
-from pyexpat.errors import messages
-
+from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, get_jwt
 from services.jwt_service import  admin_required
 from users_db import User
 from flask import Flask, jsonify, send_file
@@ -330,6 +327,69 @@ def handle_management():
             'status': 'error',
             'message': str(e)
         }), 500
+
+
+from flask import jsonify
+from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
+import logging
+
+from flask import jsonify
+from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
+import logging
+
+@app.route('/api/get-subjects-by-faculty/<faculty>', methods=['GET'])
+@jwt_required()
+def get_subjects_by_faculty(faculty):
+    global current_scheduler
+    logging.info(f"Запрос API для предметов факультета: {faculty}")
+
+    if current_scheduler is None:
+        logging.error("current_scheduler не инициализирован")
+        return jsonify({"error": "Планировщик не инициализирован"}), 500
+
+    try:
+        # Получаем данные из JWT-токена
+        claims = get_jwt()
+        user_role = claims.get('role')
+        current_user = get_jwt_identity()
+        logging.info(f"Роль текущего пользователя: {user_role}, пользователь: {current_user}")
+
+        # Словарь соответствия ролей и факультетов
+        role_to_faculty = {
+            "admin-sdt": "Школа цифровых технологий",
+            "admin-sem": "Школа экономики и менеджмента",
+            "admin-gum": "Гуманитарная школа",
+            "admin-spigu": "Школа права и государственного управления"
+        }
+
+        # Проверяем роль и определяем факультет
+        requested_faculty = faculty  # Сохраняем запрошенный факультет
+        if user_role in role_to_faculty:
+            faculty = role_to_faculty[user_role]
+            logging.info(f"Факультет переопределён для роли {user_role}: {faculty}")
+        elif user_role == "admin":
+            # Для роли admin используем факультет из URL
+            logging.info(f"Роль admin, используется запрошенный факультет: {faculty}")
+        elif user_role == "student":
+            # Для студентов используем переданный факультет
+            logging.info(f"Студент запрашивает факультет: {faculty}")
+        else:
+            # Неизвестная роль
+            logging.error(f"Недопустимая роль пользователя: {user_role}")
+            return jsonify({"error": "Недопустимая роль пользователя"}), 403
+
+        # Получаем предметы для факультета
+        subjects = current_scheduler.get_by_faculty(faculty)
+        return jsonify({
+            "subjects": subjects,
+            "user": current_user,
+            "role": user_role,
+            "requested_faculty": requested_faculty,
+            "used_faculty": faculty
+        })
+    except Exception as e:
+        logging.error(f"Ошибка в get_subjects_by_faculty для факультета {faculty}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 # Получить список сессий
 @app.route('/api/sessions', methods=['GET'])
