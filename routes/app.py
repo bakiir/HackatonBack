@@ -239,6 +239,18 @@ session = Session()
 def handle_management():
     global current_scheduler
     logging.info(f"Запрос API /manage с данными: {request.json}")
+    claims = get_jwt()
+    user_role = claims.get('role')
+    current_user = get_jwt_identity()
+    logging.info(f"Роль текущего пользователя: {user_role}, пользователь: {current_user}")
+
+    # Словарь соответствия ролей и факультетов
+    role_to_faculty = {
+        "admin-sdt": "Школа цифровых технологий",
+        "admin-sem": "Школа экономики и менеджмента",
+        "admin-gum": "Гуманитарная школа",
+        "admin-spigu": "Школа права и государственного управления"
+    }
 
     if current_scheduler is None:
         logging.error("current_scheduler не инициализирован")
@@ -250,18 +262,6 @@ def handle_management():
 
         if action == 'get_subjects':
             # Получаем данные из JWT-токена
-            claims = get_jwt()
-            user_role = claims.get('role')
-            current_user = get_jwt_identity()
-            logging.info(f"Роль текущего пользователя: {user_role}, пользователь: {current_user}")
-
-            # Словарь соответствия ролей и факультетов
-            role_to_faculty = {
-                "admin-sdt": "Школа цифровых технологий",
-                "admin-sem": "Школа экономики и менеджмента",
-                "admin-gum": "Гуманитарная школа",
-                "admin-spigu": "Школа права и государственного управления"
-            }
 
             # Проверяем роль и определяем факультет
             requested_faculty = data.get('faculty')  # Извлекаем факультет из JSON
@@ -317,6 +317,9 @@ def handle_management():
             })
 
         elif action == 'generate':
+            if user_role != "admin":
+                logging.error(f"Доступ запрещён для роли {user_role}")
+                return jsonify({"error": "Доступ запрещён! Только admin может генерировать расписание"}), 403
 
             # Generate the schedule
             current_scheduler.create_schedule()
