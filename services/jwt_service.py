@@ -6,6 +6,7 @@ import jwt
 
 from datetime import datetime, timedelta
 
+from flask import jsonify
 from flask_jwt_extended import jwt_required, get_jwt, create_access_token
 
 # Секретный ключ для подписи JWT
@@ -22,29 +23,41 @@ def generate_access_token(identity: str, role: str):
     return create_access_token(identity=identity, additional_claims=additional_claims, expires_delta=expires_delta)
 
 
-def role_required(role):
+def admin_required(role):
     def decorator(f):
         @wraps(f)
         @jwt_required()
         def decorated_function(*args, **kwargs):
             claims = get_jwt()
-            if role in claims.get('role', ["admin"]):
+            user_roles = claims.get('role', [])
+            if isinstance(user_roles, str):  # если одна строка
+                user_roles = [user_roles]
+
+            if role in user_roles:
                 return f(*args, **kwargs)
-            return {'msg': 'Forbidden'}, 403
+            return jsonify({'msg': 'Forbidden'}), 403
         return decorated_function
     return decorator
 
-def role_required_school(role):
+
+def role_required_school():
+    allowed_roles = {"admin-sdt", "admin-gum", "admin-slpa", "admin-sem"}
+
     def decorator(f):
         @wraps(f)
         @jwt_required()
         def decorated_function(*args, **kwargs):
             claims = get_jwt()
-            if role in claims.get('role', ["admin-sdt", "admin-gum", "admin-slpa", "admin-sem"]):
+            user_roles = claims.get('role', [])
+            if isinstance(user_roles, str):  # если одна строка
+                user_roles = [user_roles]
+
+            if any(role in allowed_roles for role in user_roles):
                 return f(*args, **kwargs)
-            return {'msg': 'Forbidden'}, 403
+            return jsonify({'msg': 'Forbidden'}), 403
         return decorated_function
     return decorator
+
 
 
 

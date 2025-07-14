@@ -5,6 +5,7 @@ import bcrypt
 import jwt
 from datetime import datetime, timedelta
 
+
 # Конфигурация JWT
 SECRET_KEY = "your-secret-key"  # Замените на реальный секретный ключ
 ALGORITHM = "HS256"
@@ -71,6 +72,28 @@ class User(Base):
         session.add(new_user)
         session.commit()
         return new_user
+
+    @classmethod
+    def update_user(cls, session, id, email=None, password = None, full_name=None, role = None ):
+        user = session.query(cls).filter_by(id=id).first();
+        if not user:
+            raise ValueError("Пользователь не найден")
+
+        if email and email != user.email:
+            if session.query(cls).filter_by(email=email).first():
+                raise ValueError("Пользователь с таким email уже существует")
+            user.email = email
+        if password:
+            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            user.password = hashed_password
+
+        if full_name:
+            user.full_name = full_name
+
+        if role:
+            user.role = role
+        session.commit()
+        return user
 
     @classmethod
     def get_by_email(cls, session, email):

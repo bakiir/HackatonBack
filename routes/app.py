@@ -5,24 +5,25 @@ import traceback
 from venv import logger
 import bcrypt
 from flask_jwt_extended import JWTManager, jwt_required
+from openpyxl.descriptors import Integer
+from pyexpat.errors import messages
 
-from jwt_service import role_required
+from services.jwt_service import  admin_required
 from users_db import User
 from flask import Flask, jsonify, send_file
 import logging
 from flask_cors import CORS
-from xx import ExamScheduler
+from services.exam_scheduler import ExamScheduler
 import numpy as np
 import pandas as pd
-import os, jwt_service
+import os
 from flask import request
 from create_db import ExamSession, engine
 from sqlalchemy.orm import sessionmaker
 
+allowed_roles = {"admin-sdt", "admin-gum", "admin-spigu", "admin-sem", "admin"}
 
 
-
-from flask_sqlalchemy import SQLAlchemy
 def handle_nan_values(obj):
     if isinstance(obj, (float, np.float64, np.float32)) and (math.isnan(obj) or np.isnan(obj)):
         return None
@@ -49,7 +50,7 @@ CORS(app)
 current_scheduler = None
 
 @app.route('/api/proctors/assign', methods=['POST'])
-@role_required("admin")
+@admin_required("admin")
 def assign_proctors():
     global current_scheduler
 
@@ -110,7 +111,7 @@ def save_proctor_list_excel():
 
 
 @app.route('/api/init', methods=['POST'])
-@role_required("admin")
+@admin_required("admin")
 def handle_initialization():
     global current_scheduler
 
@@ -160,7 +161,7 @@ def handle_initialization():
 
 
 @app.route('/api/manage_dates', methods=['POST'])
-@role_required("admin")
+@admin_required("admin")
 def manage_dates():
     global current_scheduler
 
@@ -332,7 +333,7 @@ def handle_management():
 
 # Получить список сессий
 @app.route('/api/sessions', methods=['GET'])
-@role_required("admin")
+@admin_required("admin")
 def get_all_sessions():
     db_session = Session()
     try:
@@ -360,7 +361,7 @@ def get_all_sessions():
 
 
 @app.route('/api/sessions/<int:session_id>/data', methods=['GET'])
-@role_required("admin")
+@admin_required("admin")
 def get_data_by_id(session_id):
     db_session = Session()
     try:
@@ -380,7 +381,7 @@ def get_data_by_id(session_id):
 
 # Получить детали конкретной сессии
 @app.route('/api/sessions/<int:session_id>', methods=['GET'])
-@role_required("admin")
+@admin_required("admin")
 def get_session_details(session_id):
     db_session = Session()
     try:
@@ -396,7 +397,7 @@ def get_session_details(session_id):
 
 
 @app.route('/api/sessions/<int:session_id>/activate', methods=['POST'])
-@role_required("admin")
+@admin_required("admin")
 def activate_session(session_id):
     db_session = Session()
     try:
@@ -435,7 +436,7 @@ def activate_session(session_id):
 
 
 @app.route('/api/sessions/<int:session_id>', methods=['DELETE'])
-@role_required("admin")
+@admin_required("admin")
 def delete_session(session_id):
     db = Session()
     try:
@@ -555,7 +556,6 @@ def get_subject_groups(subject):
 
 
 @app.route('/subjects/<subject>/delete', methods=['DELETE'])
-@role_required("admin")
 def delete_subject(subject):
     try:
         subject_groups = current_scheduler.exam_groups[current_scheduler.exam_groups['Subject'] == subject]
@@ -584,7 +584,6 @@ def delete_subject(subject):
 
 
 @app.route('/subjects/<subject>/sections/<section>', methods=['DELETE'])
-@role_required("admin")
 def delete_section(subject, section):
     try:
         subject_groups = current_scheduler.exam_groups[current_scheduler.exam_groups['Subject'] == subject]
@@ -638,7 +637,6 @@ def get_available_rooms(day, time_slot):
 
 
 @app.route('/schedule/edit/<string:section>', methods=['POST'])
-@role_required("admin")
 def edit_schedule(section):
     logging.info(f"Получен запрос на редактирование секции: {section}")
 
@@ -747,6 +745,64 @@ def register():
     finally:
         session.close()
 
+@app.route('/api/register-admin', methods=['POST'])
+@admin_required("admin")
+def register_admin():
+    """
+    Регистрация нового админа.
+    """
+    data = request.get_json()  # Получаем данные из запроса
+    if not data or 'email' not in data or 'password' not in data or 'role' not in data:
+        return jsonify({"error": "Email, password and role are required"}), 400
+
+    email = data['email']
+    password = data['password']
+    role = data.get('role')  # По умолчанию роль 'student'
+    full_name = data['full_name']
+
+    if role not in allowed_roles:
+        return jsonify({
+            "error": f"Недопустимая роль. Разрешены только: {', '.join(allowed_roles)}"
+        }), 400
+
+    session = Session()
+    try:
+        # Регистрируем пользователя
+        user = User.register_user(session, email, password, full_name, role)
+        return jsonify({
+            "message": "Admin registered successfully",
+            "user": user.to_dict()
+        }), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": "An internal error occurred"}), 500
+    finally:
+        session.close()
+
+@app.route('/api/update-user/<int:user_id>', methods=['PUT'])
+@admin_required("admin")
+def update_user(user_id):
+    data = request.get_json()
+    session = Session()
+    try:
+        user = User.update_user(
+            session,
+            id=user_id,
+            email=data.get("email", None),
+            password=None,
+            full_name=data.get("full_name", None),
+            role=data.get("role", None)
+        )
+        return jsonify({"message": "Пользователь обновлён", "user": user.to_dict()}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception:
+        return jsonify({"error": "Ошибка при обновлении"}), 500
+    finally:
+        session.close()
+
+
 @app.route('/api/login', methods=['POST'])
 def login():
     user_session = Session()
@@ -817,7 +873,6 @@ def update_exam_status():
 
 
 @app.route('/api/update_proctor_status', methods=['POST'])
-@role_required("admin")
 def update_proctor_status():
     global current_scheduler
 
@@ -850,7 +905,6 @@ def update_proctor_status():
 
 
 @app.route('/api/update_room_requirement', methods=['POST'])
-@role_required("admin")
 def update_room_requirement():
     global current_scheduler
     try:
@@ -881,7 +935,7 @@ def update_room_requirement():
         }), 500
 
 @app.route('/api/upload-students', methods=['POST'])
-@role_required("admin")
+@admin_required("admin")
 def upload_students():
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
