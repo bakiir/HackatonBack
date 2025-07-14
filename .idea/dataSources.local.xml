@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="dataSourceStorageLocal" created-in="PY-242.21829.153">
-    <data-source name="exam_sessions" uuid="6907976f-ddd4-495c-a32c-e71cb9154216">
+    <data-source name="exam_sessions" uuid="430b458f-6c12-46c6-b75f-af6944680435">
       <database-info product="SQLite" version="3.45.1" jdbc-version="4.2" driver-name="SQLite JDBC" driver-version="3.45.1.0" dbms="SQLITE" exact-version="3.45.1" exact-driver-version="3.45">
         <identifier-quote-string>&quot;</identifier-quote-string>
       </database-info>
