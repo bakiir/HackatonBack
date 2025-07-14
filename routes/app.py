@@ -328,15 +328,7 @@ def handle_management():
             'message': str(e)
         }), 500
 
-
-from flask import jsonify
-from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
-import logging
-
-from flask import jsonify
-from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
-import logging
-
+@app.route('/api/get-subjects-by-faculty/', defaults={'faculty': None})
 @app.route('/api/get-subjects-by-faculty/<faculty>', methods=['GET'])
 @jwt_required()
 def get_subjects_by_faculty(faculty):
