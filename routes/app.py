@@ -19,6 +19,12 @@ from create_db import ExamSession, engine
 from sqlalchemy.orm import sessionmaker
 
 allowed_roles = {"admin-sdt", "admin-gum", "admin-spigu", "admin-sem", "admin"}
+role_to_faculty = {
+    "admin-sdt": "Школа цифровых технологий",
+    "admin-sem": "Школа экономики и менеджмента",
+    "admin-gum": "Гуманитарная школа",
+    "admin-spigu": "Школа права и государственного управления"
+}
 
 
 def handle_nan_values(obj):
@@ -229,21 +235,64 @@ def manage_dates():
 Session = sessionmaker(bind=engine)
 session = Session()
 @app.route('/api/manage', methods=['POST'])
+@jwt_required()
 def handle_management():
     global current_scheduler
+    logging.info(f"Запрос API /manage с данными: {request.json}")
+
+    if current_scheduler is None:
+        logging.error("current_scheduler не инициализирован")
+        return jsonify({"error": "Планировщик не инициализирован"}), 500
 
     try:
-        if not current_scheduler:
-            raise ValueError("Планировщик не инициализирован")
-
         data = request.json
-        action = data['action']
+        action = data.get('action')
 
-        # Обработка различных действий
         if action == 'get_subjects':
+            # Получаем данные из JWT-токена
+            claims = get_jwt()
+            user_role = claims.get('role')
+            current_user = get_jwt_identity()
+            logging.info(f"Роль текущего пользователя: {user_role}, пользователь: {current_user}")
+
+            # Словарь соответствия ролей и факультетов
+            role_to_faculty = {
+                "admin-sdt": "Школа цифровых технологий",
+                "admin-sem": "Школа экономики и менеджмента",
+                "admin-gum": "Гуманитарная школа",
+                "admin-spigu": "Школа права и государственного управления"
+            }
+
+            # Проверяем роль и определяем факультет
+            requested_faculty = data.get('faculty')  # Извлекаем факультет из JSON
+            if user_role in role_to_faculty:
+                faculty = role_to_faculty[user_role]
+                logging.info(f"Факультет переопределён для роли {user_role}: {faculty}")
+            elif user_role == "admin":
+                if requested_faculty is None:
+                    logging.error("Для роли admin требуется указать факультет в запросе")
+                    return jsonify({"error": "Факультет не указан в запросе"}), 400
+                faculty = requested_faculty
+                logging.info(f"Роль admin, используется запрошенный факультет: {faculty}")
+            elif user_role == "student":
+                if requested_faculty is None:
+                    logging.error("Для роли student требуется указать факультет в запросе")
+                    return jsonify({"error": "Факультет не указан в запросе"}), 400
+                faculty = requested_faculty
+                logging.info(f"Студент запрашивает факультет: {faculty}")
+            else:
+                logging.error(f"Недопустимая роль пользователя: {user_role}")
+                return jsonify({"error": "Недопустимая роль пользователя"}), 403
+
+            # Получаем предметы для факультета
+            subjects = current_scheduler.get_by_faculty(faculty)
             return jsonify({
-                'status': 'success',
-                'subjects': current_scheduler.get_unique_subjects()
+                "status": "success",
+                "subjects": subjects,
+                "user": current_user,
+                "role": user_role,
+                "requested_faculty": requested_faculty if requested_faculty else "не указан",
+                "used_faculty": faculty
             })
 
         elif action == 'delete_subject':
@@ -266,10 +315,6 @@ def handle_management():
                 'message': f'Секция {section} удалена',
                 'remaining_subjects': current_scheduler.get_unique_subjects()
             })
-
-        # elif action == 'manage_date':
-        #     current_scheduler.schedule_df['Date'] = data['date']
-
 
         elif action == 'generate':
 
@@ -345,14 +390,6 @@ def get_subjects_by_faculty(faculty):
         user_role = claims.get('role')
         current_user = get_jwt_identity()
         logging.info(f"Роль текущего пользователя: {user_role}, пользователь: {current_user}")
-
-        # Словарь соответствия ролей и факультетов
-        role_to_faculty = {
-            "admin-sdt": "Школа цифровых технологий",
-            "admin-sem": "Школа экономики и менеджмента",
-            "admin-gum": "Гуманитарная школа",
-            "admin-spigu": "Школа права и государственного управления"
-        }
 
         # Проверяем роль и определяем факультет
         requested_faculty = faculty  # Сохраняем запрошенный факультет
