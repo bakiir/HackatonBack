@@ -5,7 +5,7 @@ import bcrypt
 import jwt
 from datetime import datetime, timedelta
 
-from create_db import AdminStatus, ExamSession
+from create_db import AdminStatusDraft
 
 # Конфигурация JWT
 SECRET_KEY = "your-secret-key"  # Замените на реальный секретный ключ
@@ -125,31 +125,60 @@ class User(Base):
         return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def get_or_create_admin_status(session, session_id, role):
-    admin_status = session.query(AdminStatus).filter_by(session_id=session_id, role=role).first()
-    if not admin_status:
-        admin_status = AdminStatus(session_id=session_id, role=role, status="in_progress")
-        session.add(admin_status)
+def get_or_create_admin_status(session, session_id: int, role: str, model=AdminStatusDraft):
+    """
+    Get or create an admin status record for a given session and role.
+    :param session: SQLAlchemy session
+    :param session_id: ID of the session (ExamSession or ExamSessionDraft)
+    :param role: Admin role (e.g., admin-sdt, admin-sem)
+    :param model: The model to use (AdminStatus or AdminStatusDraft)
+    :return: The AdminStatus or AdminStatusDraft instance
+    """
+    status = session.query(model).filter_by(session_id=session_id, role=role).first()
+    if not status:
+        status = model(session_id=session_id, role=role, status="in_progress")
+        session.add(status)
         session.commit()
-    return admin_status
+    return status
+
+def set_admin_status_ready(session, session_id: int, role: str, model=AdminStatusDraft):
+    """
+    Set the status to 'ready' for a given admin role and session.
+    :param session: SQLAlchemy session
+    :param session_id: ID of the session (ExamSession or ExamSessionDraft)
+    :param role: Admin role (e.g., admin-sdt, admin-sem)
+    :param model: The model to use (AdminStatus or AdminStatusDraft)
+    :return: The updated AdminStatus or AdminStatusDraft instance
+    """
+    status = session.query(model).filter_by(session_id=session_id, role=role).first()
+    if status:
+        status.status = "ready"
+        status.updated_at = datetime.utcnow()
+        session.commit()
+    return status
 
 
-def set_admin_status_ready(session, session_id, role):
-    admin_status = get_or_create_admin_status(session, session_id, role)
-    admin_status.status = "ready"
-    session.commit()
-    return admin_status
+def get_all_admin_statuses(session, session_id: int, model=AdminStatusDraft):
+    """
+    Get all admin status records for a given session.
+    :param session: SQLAlchemy session
+    :param session_id: ID of the session (ExamSession or ExamSessionDraft)
+    :param model: The model to use (AdminStatus or AdminStatusDraft)
+    :return: List of AdminStatus or AdminStatusDraft instances
+    """
+    return session.query(model).filter_by(session_id=session_id).all()
 
 
-def get_all_admin_statuses(session, session_id):
-    return session.query(AdminStatus).filter_by(session_id=session_id).all()
-
-
-def are_all_admins_ready(session, session_id):
-    required_roles = ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]
-    statuses = get_all_admin_statuses(session, session_id)
-    ready_roles = {s.role for s in statuses if s.status == "ready"}
-    return set(required_roles).issubset(ready_roles)
+def are_all_admins_ready(session, session_id: int, model=AdminStatusDraft):
+    """
+    Check if all admins for a given session have 'ready' status.
+    :param session: SQLAlchemy session
+    :param session_id: ID of the session (ExamSession or ExamSessionDraft)
+    :param model: The model to use (AdminStatus or AdminStatusDraft)
+    :return: Boolean indicating if all admins are ready
+    """
+    statuses = get_all_admin_statuses(session, session_id, model)
+    return all(status.status == "ready" for status in statuses)
 
 
 # Создание таблиц в базе данных

@@ -57,12 +57,13 @@ class ExamSession(Base):
             "is_active": self.is_active
         }
 
-# Создаем таблицы
-class AdminStatus(Base):
-    __tablename__ = "admin_status"
+
+# Новая модель для статусов администраторов черновиков
+class AdminStatusDraft(Base):
+    __tablename__ = "admin_status_draft"
 
     id = Column(Integer, primary_key=True)
-    session_id = Column(Integer, ForeignKey("exam_session.id"), nullable=False)
+    session_id = Column(Integer, ForeignKey("exam_session_draft.id"), nullable=False)
     role = Column(String(50), nullable=False)
     status = Column(String(20), default="in_progress")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -76,6 +77,49 @@ class AdminStatus(Base):
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
+class ExamSessionDraft(Base):
+    __tablename__ = "exam_session_draft"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String(150), nullable=False)
+    start_date = Column(Date, nullable=False)
+    days = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    faculties_data = Column(Text)  # Данные о факультетах
+    exams_data = Column(Text)     # Данные об экзаменах
+    rooms_data = Column(Text)     # Данные о помещениях
+    is_active = Column(Boolean, default=False)
+
+    def set_faculties(self, faculties_dict):
+        self.faculties_data = json.dumps(faculties_dict, ensure_ascii=False)
+
+    def get_faculties(self):
+        return json.loads(self.faculties_data) if self.faculties_data else None
+
+    def set_exams(self, exams_dict):
+        self.exams_data = json.dumps(exams_dict, ensure_ascii=False)
+
+    def get_exams(self):
+        return json.loads(self.exams_data) if self.exams_data else None
+
+    def set_rooms(self, rooms_dict):
+        self.rooms_data = json.dumps(rooms_dict, ensure_ascii=False)
+
+    def get_rooms(self):
+        return json.loads(self.rooms_data) if self.rooms_data else None
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "start_date": self.start_date.isoformat() if self.start_date else None,
+            "days": self.days,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "faculties_data": json.loads(self.faculties_data) if self.faculties_data else None,
+            "exams_data": json.loads(self.exams_data) if self.exams_data else None,
+            "rooms_data": json.loads(self.rooms_data) if self.rooms_data else None,
+            "is_active": self.is_active
+        }
 
 engine = create_engine("sqlite:///exam_sessions.db", echo=True)
 Base.metadata.create_all(engine)

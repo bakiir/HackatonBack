@@ -499,7 +499,7 @@
     </routine>
     <schema id="191" parent="1" name="main">
       <Current>1</Current>
-      <LastIntrospectionLocalTimestamp>2025-07-14.10:45:46</LastIntrospectionLocalTimestamp>
+      <LastIntrospectionLocalTimestamp>2025-07-31.12:21:04</LastIntrospectionLocalTimestamp>
     </schema>
     <argument id="192" parent="16">
       <ArgumentDirection>R</ArgumentDirection>
@@ -1590,126 +1590,294 @@
     <argument id="554" parent="190">
       <Position>1</Position>
     </argument>
-    <table id="555" parent="191" name="exam_session"/>
-    <table id="556" parent="191" name="exam_users"/>
-    <table id="557" parent="191" name="sqlite_master">
+    <table id="555" parent="191" name="admin_status_draft"/>
+    <table id="556" parent="191" name="exam_sections"/>
+    <table id="557" parent="191" name="exam_session"/>
+    <table id="558" parent="191" name="exam_session_draft"/>
+    <table id="559" parent="191" name="exam_users"/>
+    <table id="560" parent="191" name="sqlite_master">
       <System>1</System>
     </table>
-    <column id="558" parent="555" name="id">
+    <table id="561" parent="191" name="users"/>
+    <column id="562" parent="555" name="id">
       <NotNull>1</NotNull>
       <Position>1</Position>
       <StoredType>INTEGER|0s</StoredType>
     </column>
-    <column id="559" parent="555" name="title">
+    <column id="563" parent="555" name="session_id">
+      <NotNull>1</NotNull>
+      <Position>2</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="564" parent="555" name="role">
+      <NotNull>1</NotNull>
+      <Position>3</Position>
+      <StoredType>VARCHAR(50)|0s</StoredType>
+    </column>
+    <column id="565" parent="555" name="status">
+      <Position>4</Position>
+      <StoredType>VARCHAR(20)|0s</StoredType>
+    </column>
+    <column id="566" parent="555" name="updated_at">
+      <Position>5</Position>
+      <StoredType>DATETIME|0s</StoredType>
+    </column>
+    <foreign-key id="567" parent="555">
+      <ColNames>session_id</ColNames>
+      <RefColNames>id</RefColNames>
+      <RefTableName>exam_session_draft</RefTableName>
+    </foreign-key>
+    <key id="568" parent="555">
+      <ColNames>id</ColNames>
+      <Primary>1</Primary>
+    </key>
+    <column id="569" parent="556" name="id">
+      <NotNull>1</NotNull>
+      <Position>1</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="570" parent="556" name="section_id">
       <NotNull>1</NotNull>
       <Position>2</Position>
       <StoredType>VARCHAR(150)|0s</StoredType>
     </column>
-    <column id="560" parent="555" name="start_date">
+    <column id="571" parent="556" name="subject">
       <NotNull>1</NotNull>
       <Position>3</Position>
-      <StoredType>DATE|0s</StoredType>
+      <StoredType>VARCHAR(150)|0s</StoredType>
     </column>
-    <column id="561" parent="555" name="original_start_date">
+    <column id="572" parent="556" name="instructor">
+      <NotNull>1</NotNull>
       <Position>4</Position>
-      <StoredType>DATE|0s</StoredType>
+      <StoredType>VARCHAR(150)|0s</StoredType>
     </column>
-    <column id="562" parent="555" name="days">
+    <column id="573" parent="556" name="edu_program">
+      <NotNull>1</NotNull>
       <Position>5</Position>
-      <StoredType>INTEGER|0s</StoredType>
+      <StoredType>VARCHAR(150)|0s</StoredType>
     </column>
-    <column id="563" parent="555" name="original_num_days">
+    <column id="574" parent="556" name="years_of_study">
+      <NotNull>1</NotNull>
       <Position>6</Position>
       <StoredType>INTEGER|0s</StoredType>
     </column>
-    <column id="564" parent="555" name="created_at">
+    <column id="575" parent="556" name="student_count">
+      <NotNull>1</NotNull>
       <Position>7</Position>
-      <StoredType>DATETIME|0s</StoredType>
+      <StoredType>INTEGER|0s</StoredType>
     </column>
-    <column id="565" parent="555" name="seat_assignments">
+    <column id="576" parent="556" name="faculty">
+      <NotNull>1</NotNull>
       <Position>8</Position>
-      <StoredType>JSON|0s</StoredType>
+      <StoredType>VARCHAR(150)|0s</StoredType>
     </column>
-    <column id="566" parent="555" name="schedule_data">
+    <column id="577" parent="556" name="proctor_needed">
       <Position>9</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="567" parent="555" name="exams_data">
-      <Position>10</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="568" parent="555" name="rooms_data">
-      <Position>11</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="569" parent="555" name="faculties_data">
-      <Position>12</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="570" parent="555" name="is_active">
-      <Position>13</Position>
       <StoredType>BOOLEAN|0s</StoredType>
     </column>
-    <key id="571" parent="555">
+    <column id="578" parent="556" name="two_rooms_needed">
+      <Position>10</Position>
+      <StoredType>BOOLEAN|0s</StoredType>
+    </column>
+    <column id="579" parent="556" name="duration">
+      <Position>11</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="580" parent="556" name="has_exam">
+      <Position>12</Position>
+      <StoredType>BOOLEAN|0s</StoredType>
+    </column>
+    <index id="581" parent="556" name="sqlite_autoindex_exam_sections_1">
+      <ColNames>section_id</ColNames>
+      <NameSurrogate>1</NameSurrogate>
+      <Unique>1</Unique>
+    </index>
+    <key id="582" parent="556">
       <ColNames>id</ColNames>
       <Primary>1</Primary>
     </key>
-    <column id="572" parent="556" name="id">
+    <key id="583" parent="556">
+      <ColNames>section_id</ColNames>
+      <UnderlyingIndexName>sqlite_autoindex_exam_sections_1</UnderlyingIndexName>
+    </key>
+    <column id="584" parent="557" name="id">
       <NotNull>1</NotNull>
       <Position>1</Position>
       <StoredType>INTEGER|0s</StoredType>
     </column>
-    <column id="573" parent="556" name="email">
+    <column id="585" parent="557" name="title">
+      <NotNull>1</NotNull>
+      <Position>2</Position>
+      <StoredType>VARCHAR(150)|0s</StoredType>
+    </column>
+    <column id="586" parent="557" name="start_date">
+      <NotNull>1</NotNull>
+      <Position>3</Position>
+      <StoredType>DATE|0s</StoredType>
+    </column>
+    <column id="587" parent="557" name="original_start_date">
+      <Position>4</Position>
+      <StoredType>DATE|0s</StoredType>
+    </column>
+    <column id="588" parent="557" name="days">
+      <Position>5</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="589" parent="557" name="original_num_days">
+      <Position>6</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="590" parent="557" name="created_at">
+      <Position>7</Position>
+      <StoredType>DATETIME|0s</StoredType>
+    </column>
+    <column id="591" parent="557" name="seat_assignments">
+      <Position>8</Position>
+      <StoredType>JSON|0s</StoredType>
+    </column>
+    <column id="592" parent="557" name="schedule_data">
+      <Position>9</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="593" parent="557" name="exams_data">
+      <Position>10</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="594" parent="557" name="rooms_data">
+      <Position>11</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="595" parent="557" name="faculties_data">
+      <Position>12</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="596" parent="557" name="is_active">
+      <Position>13</Position>
+      <StoredType>BOOLEAN|0s</StoredType>
+    </column>
+    <key id="597" parent="557">
+      <ColNames>id</ColNames>
+      <Primary>1</Primary>
+    </key>
+    <column id="598" parent="558" name="id">
+      <NotNull>1</NotNull>
+      <Position>1</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="599" parent="558" name="title">
+      <NotNull>1</NotNull>
+      <Position>2</Position>
+      <StoredType>VARCHAR(150)|0s</StoredType>
+    </column>
+    <column id="600" parent="558" name="start_date">
+      <NotNull>1</NotNull>
+      <Position>3</Position>
+      <StoredType>DATE|0s</StoredType>
+    </column>
+    <column id="601" parent="558" name="days">
+      <NotNull>1</NotNull>
+      <Position>4</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="602" parent="558" name="created_at">
+      <Position>5</Position>
+      <StoredType>DATETIME|0s</StoredType>
+    </column>
+    <column id="603" parent="558" name="faculties_data">
+      <Position>6</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="604" parent="558" name="exams_data">
+      <Position>7</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="605" parent="558" name="rooms_data">
+      <Position>8</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="606" parent="558" name="is_active">
+      <Position>9</Position>
+      <StoredType>BOOLEAN|0s</StoredType>
+    </column>
+    <key id="607" parent="558">
+      <ColNames>id</ColNames>
+      <Primary>1</Primary>
+    </key>
+    <column id="608" parent="559" name="id">
+      <NotNull>1</NotNull>
+      <Position>1</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="609" parent="559" name="email">
       <NotNull>1</NotNull>
       <Position>2</Position>
       <StoredType>VARCHAR|0s</StoredType>
     </column>
-    <column id="574" parent="556" name="password">
+    <column id="610" parent="559" name="password">
       <NotNull>1</NotNull>
       <Position>3</Position>
       <StoredType>VARCHAR|0s</StoredType>
     </column>
-    <column id="575" parent="556" name="full_name">
+    <column id="611" parent="559" name="full_name">
       <Position>4</Position>
       <StoredType>VARCHAR|0s</StoredType>
     </column>
-    <column id="576" parent="556" name="role">
+    <column id="612" parent="559" name="role">
       <NotNull>1</NotNull>
       <Position>5</Position>
       <StoredType>VARCHAR|0s</StoredType>
     </column>
-    <index id="577" parent="556" name="sqlite_autoindex_exam_users_1">
+    <index id="613" parent="559" name="sqlite_autoindex_exam_users_1">
       <ColNames>email</ColNames>
       <NameSurrogate>1</NameSurrogate>
       <Unique>1</Unique>
     </index>
-    <key id="578" parent="556">
+    <key id="614" parent="559">
       <ColNames>id</ColNames>
       <Primary>1</Primary>
     </key>
-    <key id="579" parent="556">
+    <key id="615" parent="559">
       <ColNames>email</ColNames>
       <UnderlyingIndexName>sqlite_autoindex_exam_users_1</UnderlyingIndexName>
     </key>
-    <column id="580" parent="557" name="type">
+    <column id="616" parent="560" name="type">
       <Position>1</Position>
       <StoredType>TEXT|0s</StoredType>
     </column>
-    <column id="581" parent="557" name="name">
+    <column id="617" parent="560" name="name">
       <Position>2</Position>
       <StoredType>TEXT|0s</StoredType>
     </column>
-    <column id="582" parent="557" name="tbl_name">
+    <column id="618" parent="560" name="tbl_name">
       <Position>3</Position>
       <StoredType>TEXT|0s</StoredType>
     </column>
-    <column id="583" parent="557" name="rootpage">
+    <column id="619" parent="560" name="rootpage">
       <Position>4</Position>
       <StoredType>INT|0s</StoredType>
     </column>
-    <column id="584" parent="557" name="sql">
+    <column id="620" parent="560" name="sql">
       <Position>5</Position>
       <StoredType>TEXT|0s</StoredType>
     </column>
+    <column id="621" parent="561" name="id">
+      <NotNull>1</NotNull>
+      <Position>1</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="622" parent="561" name="username">
+      <NotNull>1</NotNull>
+      <Position>2</Position>
+      <StoredType>VARCHAR|0s</StoredType>
+    </column>
+    <column id="623" parent="561" name="role">
+      <NotNull>1</NotNull>
+      <Position>3</Position>
+      <StoredType>VARCHAR|0s</StoredType>
+    </column>
+    <key id="624" parent="561">
+      <ColNames>id</ColNames>
+      <Primary>1</Primary>
+    </key>
   </database-model>
 </dataSource>

@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import os
 from flask import request
-from create_db import ExamSession, engine
+from create_db import ExamSession, engine, ExamSessionDraft, AdminStatusDraft
 from sqlalchemy.orm import sessionmaker
 
 allowed_roles = {"admin-sdt", "admin-gum", "admin-spigu", "admin-sem", "admin"}
@@ -146,8 +146,21 @@ def handle_initialization():
                 start_date=start_date,
                 num_days=num_days
             )
+            # 4. Создание черновика сессии
+            session.query(ExamSessionDraft).update({'is_active': False})  # Деактивируем предыдущие черновики
+            new_draft = ExamSessionDraft(
+                title=title,
+                start_date=datetime.strptime(start_date, '%Y-%m-%d').date(),
+                days=num_days,
+                exams_data=current_scheduler.exams_df.to_json(orient='records'),
+                rooms_data=current_scheduler.rooms_df.to_json(orient='records'),
+                faculties_data=current_scheduler.faculties_df.to_json(orient='records'),
+                is_active=True
+            )
+            session.add(new_draft)
+            session.commit()
 
-        # 4. Возвращаем данные для управления предметами
+        # 5. Возвращаем данные для управления предметами
         return jsonify({
             'status': 'subject_management',
             'subjects': current_scheduler.get_unique_subjects(),
@@ -244,7 +257,6 @@ def handle_management():
     current_user = get_jwt_identity()
     logging.info(f"Роль текущего пользователя: {user_role}, пользователь: {current_user}")
 
-    # Словарь соответствия ролей и факультетов
     role_to_faculty = {
         "admin-sdt": "Школа цифровых технологий",
         "admin-sem": "Школа экономики и менеджмента",
@@ -256,15 +268,13 @@ def handle_management():
         logging.error("current_scheduler не инициализирован")
         return jsonify({"error": "Планировщик не инициализирован"}), 500
 
+    session = Session()
     try:
         data = request.json
         action = data.get('action')
 
         if action == 'get_subjects':
-            # Получаем данные из JWT-токена
-
-            # Проверяем роль и определяем факультет
-            requested_faculty = data.get('faculty')  # Извлекаем факультет из JSON
+            requested_faculty = data.get('faculty')
             if user_role in role_to_faculty:
                 faculty = role_to_faculty[user_role]
                 logging.info(f"Факультет переопределён для роли {user_role}: {faculty}")
@@ -284,7 +294,6 @@ def handle_management():
                 logging.error(f"Недопустимая роль пользователя: {user_role}")
                 return jsonify({"error": "Недопустимая роль пользователя"}), 403
 
-            # Получаем предметы для факультета
             subjects = current_scheduler.get_by_faculty(faculty)
             return jsonify({
                 "status": "success",
@@ -321,53 +330,41 @@ def handle_management():
                 logging.error(f"Доступ запрещён для роли {user_role}")
                 return jsonify({"error": "Доступ запрещён! Только admin может генерировать расписание"}), 403
 
-            session = Session()
-            try:
-                active_session = session.query(ExamSession).filter_by(is_active=True).first()
-                if not active_session:
-                    return jsonify({"error": "Активная сессия не найдена"}), 404
+            active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+            if not active_draft:
+                return jsonify({"error": "Активный черновик сессии не найден"}), 404
 
-                if not are_all_admins_ready(session, active_session.id):
-                    statuses = get_all_admin_statuses(session, active_session.id)
-                    ready_roles = {s.role for s in statuses if s.status == 'ready'}
-                    not_ready_roles = [role for role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"] if role not in ready_roles]
-                    return jsonify({"error": f"Не все администраторы готовы. Не готовы: {not_ready_roles}"}), 400
+            if not are_all_admins_ready(session, active_draft.id, model=AdminStatusDraft):
+                statuses = get_all_admin_statuses(session, active_draft.id, model=AdminStatusDraft)
+                ready_roles = {s.role for s in statuses if s.status == 'ready'}
+                not_ready_roles = [role for role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"] if role not in ready_roles]
+                return jsonify({"error": f"Не все администраторы готовы. Не готовы: {not_ready_roles}"}), 400
 
-                # Generate the schedule
-                current_scheduler.create_schedule()
+            # Generate the schedule
+            current_scheduler.create_schedule()
 
-                # Deactivate all previous sessions
-                session.query(ExamSession).update({'is_active': False})
+            # Деактивируем все предыдущие сессии и создаём новую
+            session.query(ExamSession).update({'is_active': False})
+            new_session = ExamSession(
+                title=current_scheduler.title,
+                start_date=current_scheduler.original_start_date,
+                original_start_date=current_scheduler.original_start_date,
+                days=current_scheduler.original_num_days,
+                original_num_days=current_scheduler.original_num_days,
+                schedule_data=current_scheduler.schedule_df.to_json(orient='records'),
+                exams_data=current_scheduler.exams_df.to_json(orient='records'),
+                rooms_data=current_scheduler.rooms_df.to_json(orient='records'),
+                faculties_data=current_scheduler.faculties_df.to_json(orient='records'),
+                seat_assignments=current_scheduler.seat_assignments,
+                is_active=True
+            )
+            session.add(new_session)
 
-                new_session = ExamSession(
-                    title=current_scheduler.title,
-                    start_date=current_scheduler.original_start_date,
-                    original_start_date=current_scheduler.original_start_date,
-                    days=current_scheduler.original_num_days,
-                    original_num_days=current_scheduler.original_num_days,
-                    schedule_data=current_scheduler.schedule_df.to_json(orient='records'),
-                    exams_data=current_scheduler.exams_df.to_json(orient='records'),
-                    rooms_data=current_scheduler.rooms_df.to_json(orient='records'),
-                    faculties_data=current_scheduler.faculties_df.to_json(orient='records'),
-                    seat_assignments=current_scheduler.seat_assignments,  # Просто словарь
-                    is_active=True
-                )
-                session.add(new_session)
-                session.commit()
+            # Удаляем черновик и связанные статусы
+            session.query(AdminStatusDraft).filter_by(session_id=active_draft.id).delete()
+            session.delete(active_draft)
+            session.commit()
 
-            except Exception as e:
-                session.rollback()
-                logger.error(f"Database error: {traceback.format_exc()}")
-                return jsonify({
-                    'status': 'error',
-                    'message': f'Database error: {str(e)}'
-                }), 500
-
-            finally:
-                # Close the session to release resources
-                session.close()
-
-            # Return the sanitized schedule
             sanitized_schedule = handle_nan_values(current_scheduler.schedule_df)
             return jsonify({
                 'status': 'success',
@@ -379,15 +376,20 @@ def handle_management():
             })
 
     except Exception as e:
+        session.rollback()
         logger.error(f"Management error: {traceback.format_exc()}")
         return jsonify({
             'status': 'error',
             'message': str(e)
         }), 500
+    finally:
+        session.close()
 
-@app.route('/api/set_admin_status', methods=['POST'])
+
+
+@app.route('/api/set_admin_status_draft', methods=['POST'])
 @jwt_required()
-def set_admin_status():
+def set_admin_status_draft():
     claims = get_jwt()
     user_role = claims.get('role')
 
@@ -396,19 +398,20 @@ def set_admin_status():
 
     session = Session()
     try:
-        active_session = session.query(ExamSession).filter_by(is_active=True).first()
-        if not active_session:
-            return jsonify({"error": "Активная сессия не найдена"}), 404
+        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        if not active_draft:
+            return jsonify({"error": "Активный черновик сессии не найден"}), 404
 
-        set_admin_status_ready(session, active_session.id, user_role)
-        logging.info(f"Администратор {user_role} установил статус 'ready' для сессии {active_session.id}")
+        # Используем новую модель AdminStatusDraft
+        get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
+        set_admin_status_ready(session, active_draft.id, user_role, model=AdminStatusDraft)
+        logging.info(f"Администратор {user_role} установил статус 'ready' для черновика сессии {active_draft.id}")
         return jsonify({"message": f"Статус для {user_role} установлен на 'ready'"}), 200
     except Exception as e:
         logging.error(f"Ошибка при установке статуса: {str(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
         session.close()
-
 @app.route('/api/admin_statuses', methods=['GET'])
 @admin_required("admin")
 def admin_statuses():
@@ -1021,19 +1024,17 @@ def update_exam_status():
     user_role = claims.get('role')
     session = Session()
     try:
-        active_session = session.query(ExamSession).filter_by(is_active=True).first()
-        if active_session and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
-            get_or_create_admin_status(session, active_session.id, user_role)
+        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        if active_draft and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
             logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
 
-        # Проверяем, инициализирован ли планировщик
         if not current_scheduler:
             return jsonify({
                 'status': 'error',
                 'message': 'Планировщик не инициализирован'
             }), 400
 
-        # Получаем данные от фронта
         data = request.json
         if not data or 'exams' not in data:
             return jsonify({
@@ -1041,10 +1042,9 @@ def update_exam_status():
                 'message': 'Не предоставлены данные об экзаменах'
             }), 400
 
-        # Обновляем статус экзаменов
         for exam in data['exams']:
             section_id = exam.get('section_id')
-            has_exam = exam.get('has_exam', True)  # По умолчанию True, если не указано
+            has_exam = exam.get('has_exam', True)
             current_scheduler.update_exam_status(section_id, has_exam)
 
         return jsonify({
@@ -1062,8 +1062,6 @@ def update_exam_status():
         session.close()
 
 
-
-
 @app.route('/api/update_proctor_status', methods=['POST'])
 @jwt_required()
 def update_proctor_status():
@@ -1072,9 +1070,9 @@ def update_proctor_status():
     user_role = claims.get('role')
     session = Session()
     try:
-        active_session = session.query(ExamSession).filter_by(is_active=True).first()
-        if active_session and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
-            get_or_create_admin_status(session, active_session.id, user_role)
+        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        if active_draft and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
             logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
 
         data = request.json
@@ -1105,19 +1103,24 @@ def update_proctor_status():
     finally:
         session.close()
 
-
 @app.route('/api/update_room_requirement', methods=['POST'])
 @jwt_required()
 def update_room_requirement():
     global current_scheduler
     claims = get_jwt()
     user_role = claims.get('role')
-    session = Session()
+    session = Session(bind=engine)
     try:
-        active_session = session.query(ExamSession).filter_by(is_active=True).first()
-        if active_session and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
-            get_or_create_admin_status(session, active_session.id, user_role)
+        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        if active_draft and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
             logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
+        if not current_scheduler:
+            return jsonify({
+                'status': 'error',
+                'message': 'Планировщик не инициализирован'
+            }), 400
 
         data = request.json
         if not data or 'exams' not in data:
@@ -1128,10 +1131,14 @@ def update_room_requirement():
 
         for exam in data['exams']:
             section_id = exam.get('section_id')
-            # Используем has_room вместо two_rooms_needed
-            two_rooms_needed = exam.get('has_room', False)
+            # Align with the request field 'two_rooms_needed'
+            two_rooms_needed = exam.get('two_rooms_needed', False)
             logging.info(f"Обновлено требование к аудиториям для {section_id}: two_rooms_needed={two_rooms_needed}")
             current_scheduler.update_room_requirement(section_id, two_rooms_needed)
+
+        # Update the draft with the latest exam_groups
+        active_draft.exams_data = current_scheduler.exams_df.to_json(orient='records')
+        session.commit()
 
         return jsonify({
             'status': 'success',
@@ -1139,6 +1146,7 @@ def update_room_requirement():
         }), 200
 
     except Exception as e:
+        session.rollback()
         logging.error(f"Ошибка при обновлении требований к аудиториям: {str(e)}")
         return jsonify({
             'status': 'error',
@@ -1297,9 +1305,9 @@ def handle_update_durations():
     user_role = claims.get('role')
     session = Session()
     try:
-        active_session = session.query(ExamSession).filter_by(is_active=True).first()
-        if active_session and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
-            get_or_create_admin_status(session, active_session.id, user_role)
+        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        if active_draft and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
             logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
 
         if not current_scheduler:
@@ -1315,7 +1323,6 @@ def handle_update_durations():
                 'message': 'Не предоставлены данные об экзаменах'
             }), 400
 
-        # Валидация данных
         for exam in data['exams']:
             if 'section_id' not in exam or 'duration' not in exam:
                 return jsonify({
@@ -1329,7 +1336,6 @@ def handle_update_durations():
                     'message': 'Длительность экзамена может быть только 60, 120 или 180 минут'
                 }), 400
 
-        # Обновляем длительности
         current_scheduler.update_exam_durations(data['exams'])
 
         return jsonify({
@@ -1346,6 +1352,24 @@ def handle_update_durations():
     finally:
         session.close()
 
+@app.route('/api/delete_draft/<int:draft_id>', methods=['DELETE'])
+@admin_required("admin")
+def delete_draft(draft_id):
+    session = Session()
+    try:
+        draft = session.query(ExamSessionDraft).get(draft_id)
+        if not draft:
+            return jsonify({"error": "Черновик не найден"}), 404
+
+        session.query(AdminStatusDraft).filter_by(session_id=draft_id).delete()
+        session.delete(draft)
+        session.commit()
+        return jsonify({"message": "Черновик успешно удалён"}), 200
+    except Exception as e:
+        session.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
 
 @app.route("/api/init-admins", methods=["GET"])
 def init_admins():
