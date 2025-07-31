@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Boolean, Text
+from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Boolean, Text, ForeignKey
 from sqlalchemy.dialects.sqlite import JSON  # Изменение 1: Правильный импорт JSON
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
@@ -58,6 +58,25 @@ class ExamSession(Base):
         }
 
 # Создаем таблицы
+class AdminStatus(Base):
+    __tablename__ = "admin_status"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("exam_session.id"), nullable=False)
+    role = Column(String(50), nullable=False)
+    status = Column(String(20), default="in_progress")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "role": self.role,
+            "status": self.status,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 engine = create_engine("sqlite:///exam_sessions.db", echo=True)
 Base.metadata.create_all(engine)
 

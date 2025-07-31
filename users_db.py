@@ -5,6 +5,7 @@ import bcrypt
 import jwt
 from datetime import datetime, timedelta
 
+from create_db import AdminStatus, ExamSession
 
 # Конфигурация JWT
 SECRET_KEY = "your-secret-key"  # Замените на реальный секретный ключ
@@ -14,6 +15,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 # Подключение к базе данных
 engine = create_engine("sqlite:///exam_sessions.db", echo=True)
 Base = declarative_base()
+
 
 # Модель пользователя
 class User(Base):
@@ -74,7 +76,7 @@ class User(Base):
         return new_user
 
     @classmethod
-    def update_user(cls, session, id, email=None, password = None, full_name=None, role = None ):
+    def update_user(cls, session, id, email=None, password=None, full_name=None, role=None):
         user = session.query(cls).filter_by(id=id).first();
         if not user:
             raise ValueError("Пользователь не найден")
@@ -122,8 +124,37 @@ class User(Base):
         to_encode.update({"exp": expire})
         return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+
+def get_or_create_admin_status(session, session_id, role):
+    admin_status = session.query(AdminStatus).filter_by(session_id=session_id, role=role).first()
+    if not admin_status:
+        admin_status = AdminStatus(session_id=session_id, role=role, status="in_progress")
+        session.add(admin_status)
+        session.commit()
+    return admin_status
+
+
+def set_admin_status_ready(session, session_id, role):
+    admin_status = get_or_create_admin_status(session, session_id, role)
+    admin_status.status = "ready"
+    session.commit()
+    return admin_status
+
+
+def get_all_admin_statuses(session, session_id):
+    return session.query(AdminStatus).filter_by(session_id=session_id).all()
+
+
+def are_all_admins_ready(session, session_id):
+    required_roles = ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]
+    statuses = get_all_admin_statuses(session, session_id)
+    ready_roles = {s.role for s in statuses if s.status == "ready"}
+    return set(required_roles).issubset(ready_roles)
+
+
 # Создание таблиц в базе данных
 Base.metadata.create_all(engine)
 
 # Создание сессии
 Session = sessionmaker(bind=engine)
+

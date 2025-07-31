@@ -1,13 +1,12 @@
 import tempfile
 import math
-from crypt import methods
 from datetime import datetime, timedelta
 import traceback
 from venv import logger
 import bcrypt
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, get_jwt
 from services.jwt_service import  admin_required
-from users_db import User
+from users_db import User, get_or_create_admin_status, set_admin_status_ready, get_all_admin_statuses, are_all_admins_ready
 from flask import Flask, jsonify, send_file
 import logging
 from flask_cors import CORS
@@ -322,12 +321,21 @@ def handle_management():
                 logging.error(f"Доступ запрещён для роли {user_role}")
                 return jsonify({"error": "Доступ запрещён! Только admin может генерировать расписание"}), 403
 
-            # Generate the schedule
-            current_scheduler.create_schedule()
-
-            # Create a new session for database operations
             session = Session()
             try:
+                active_session = session.query(ExamSession).filter_by(is_active=True).first()
+                if not active_session:
+                    return jsonify({"error": "Активная сессия не найдена"}), 404
+
+                if not are_all_admins_ready(session, active_session.id):
+                    statuses = get_all_admin_statuses(session, active_session.id)
+                    ready_roles = {s.role for s in statuses if s.status == 'ready'}
+                    not_ready_roles = [role for role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"] if role not in ready_roles]
+                    return jsonify({"error": f"Не все администраторы готовы. Не готовы: {not_ready_roles}"}), 400
+
+                # Generate the schedule
+                current_scheduler.create_schedule()
+
                 # Deactivate all previous sessions
                 session.query(ExamSession).update({'is_active': False})
 
@@ -376,6 +384,47 @@ def handle_management():
             'status': 'error',
             'message': str(e)
         }), 500
+
+@app.route('/api/set_admin_status', methods=['POST'])
+@jwt_required()
+def set_admin_status():
+    claims = get_jwt()
+    user_role = claims.get('role')
+
+    if user_role not in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+        return jsonify({"error": "Доступ запрещён"}), 403
+
+    session = Session()
+    try:
+        active_session = session.query(ExamSession).filter_by(is_active=True).first()
+        if not active_session:
+            return jsonify({"error": "Активная сессия не найдена"}), 404
+
+        set_admin_status_ready(session, active_session.id, user_role)
+        logging.info(f"Администратор {user_role} установил статус 'ready' для сессии {active_session.id}")
+        return jsonify({"message": f"Статус для {user_role} установлен на 'ready'"}), 200
+    except Exception as e:
+        logging.error(f"Ошибка при установке статуса: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
+
+@app.route('/api/admin_statuses', methods=['GET'])
+@admin_required("admin")
+def admin_statuses():
+    session = Session()
+    try:
+        active_session = session.query(ExamSession).filter_by(is_active=True).first()
+        if not active_session:
+            return jsonify({"error": "Активная сессия не найдена"}), 404
+
+        statuses = get_all_admin_statuses(session, active_session.id)
+        return jsonify([s.to_dict() for s in statuses]), 200
+    except Exception as e:
+        logging.error(f"Ошибка при получении статусов: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
 
 @app.route('/api/get-subjects-by-faculty/', defaults={'faculty': None})
 @app.route('/api/get-subjects-by-faculty/<faculty>', methods=['GET'])
@@ -649,8 +698,17 @@ def get_subject_groups(subject):
 
 
 @app.route('/subjects/<subject>/delete', methods=['DELETE'])
+@jwt_required()
 def delete_subject(subject):
+    claims = get_jwt()
+    user_role = claims.get('role')
+    session = Session()
     try:
+        active_session = session.query(ExamSession).filter_by(is_active=True).first()
+        if active_session and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_session.id, user_role)
+            logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
         subject_groups = current_scheduler.exam_groups[current_scheduler.exam_groups['Subject'] == subject]
 
         if subject_groups.empty:
@@ -674,11 +732,22 @@ def delete_subject(subject):
             'success': False,
             'error': str(e)
         }), 500
+    finally:
+        session.close()
 
 
 @app.route('/subjects/<subject>/sections/<section>', methods=['DELETE'])
+@jwt_required()
 def delete_section(subject, section):
+    claims = get_jwt()
+    user_role = claims.get('role')
+    session = Session()
     try:
+        active_session = session.query(ExamSession).filter_by(is_active=True).first()
+        if active_session and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_session.id, user_role)
+            logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
         subject_groups = current_scheduler.exam_groups[current_scheduler.exam_groups['Subject'] == subject]
         if section not in subject_groups['Section'].values:
             return jsonify({
@@ -700,6 +769,8 @@ def delete_section(subject, section):
             'success': False,
             'error': str(e)
         }), 500
+    finally:
+        session.close()
 
 
 @app.route('/available-rooms/<day>/<time_slot>', methods=['GET'])
@@ -943,10 +1014,18 @@ def protected():
     return jsonify({"msg": "Access granted"})
 
 @app.route('/api/update_exam_status', methods=['POST'])
+@jwt_required()
 def update_exam_status():
     global current_scheduler
-
+    claims = get_jwt()
+    user_role = claims.get('role')
+    session = Session()
     try:
+        active_session = session.query(ExamSession).filter_by(is_active=True).first()
+        if active_session and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_session.id, user_role)
+            logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
         # Проверяем, инициализирован ли планировщик
         if not current_scheduler:
             return jsonify({
@@ -979,15 +1058,25 @@ def update_exam_status():
             'status': 'error',
             'message': f'Ошибка при обновлении статуса экзаменов: {str(e)}'
         }), 500
+    finally:
+        session.close()
 
 
 
 
 @app.route('/api/update_proctor_status', methods=['POST'])
+@jwt_required()
 def update_proctor_status():
     global current_scheduler
-
+    claims = get_jwt()
+    user_role = claims.get('role')
+    session = Session()
     try:
+        active_session = session.query(ExamSession).filter_by(is_active=True).first()
+        if active_session and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_session.id, user_role)
+            logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
         data = request.json
         if not data or 'exams' not in data:
             return jsonify({
@@ -1013,12 +1102,23 @@ def update_proctor_status():
             'status': 'error',
             'message': f'Ошибка при обновлении статуса прокторинга: {str(e)}'
         }), 500
+    finally:
+        session.close()
 
 
 @app.route('/api/update_room_requirement', methods=['POST'])
+@jwt_required()
 def update_room_requirement():
     global current_scheduler
+    claims = get_jwt()
+    user_role = claims.get('role')
+    session = Session()
     try:
+        active_session = session.query(ExamSession).filter_by(is_active=True).first()
+        if active_session and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_session.id, user_role)
+            logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
         data = request.json
         if not data or 'exams' not in data:
             return jsonify({
@@ -1044,6 +1144,8 @@ def update_room_requirement():
             'status': 'error',
             'message': f'Ошибка при обновлении требований к аудиториям: {str(e)}'
         }), 500
+    finally:
+        session.close()
 
 @app.route('/api/upload-students', methods=['POST'])
 @admin_required("admin")
@@ -1188,10 +1290,18 @@ def export_student_schedule(student_id):
 
 
 @app.route('/api/update_exam_durations', methods=['POST'])
+@jwt_required()
 def handle_update_durations():
     global current_scheduler
-
+    claims = get_jwt()
+    user_role = claims.get('role')
+    session = Session()
     try:
+        active_session = session.query(ExamSession).filter_by(is_active=True).first()
+        if active_session and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_session.id, user_role)
+            logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
         if not current_scheduler:
             return jsonify({
                 'status': 'error',
@@ -1233,6 +1343,8 @@ def handle_update_durations():
             'status': 'error',
             'message': f'Ошибка при обновлении длительностей: {str(e)}'
         }), 500
+    finally:
+        session.close()
 
 
 @app.route("/api/init-admins", methods=["GET"])
@@ -1244,5 +1356,5 @@ def init_admins():
     User.register_user(session, "admin-spigu@narxoz.kz", "admin123", "admin-spigu", "admin-spigu");
 
 
-# if __name__ == '__main__':
-#     app.run(debug=True, port=5000)
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
