@@ -1418,5 +1418,69 @@ def init_admins():
     User.register_user(session, "admin-spigu@narxoz.kz", "admin123", "admin-spigu", "admin-spigu");
 
 
+# Получить список всех черновиков
+@app.route('/api/drafts', methods=['GET'])
+@admin_required("admin")
+def get_all_drafts():
+    session = Session(bind=engine)
+    try:
+        drafts = session.query(ExamSessionDraft).all()
+        drafts_data = [
+            {
+                'id': draft.id,
+                'title': draft.title,
+                'start_date': draft.start_date.isoformat() if draft.start_date else None,
+                'days': draft.days,
+                'created_at': draft.created_at.isoformat() if draft.created_at else None,
+                'is_active': draft.is_active
+            }
+            for draft in drafts
+        ]
+        return jsonify(drafts_data), 200
+    except Exception as e:
+        logging.error(f"Ошибка при получении списка черновиков: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
+
+# Получить детали конкретного черновика
+@app.route('/api/drafts/<int:draft_id>', methods=['GET'])
+@admin_required("admin")
+def get_draft_details(draft_id):
+    session = Session(bind=engine)
+    try:
+        draft = session.query(ExamSessionDraft).get(draft_id)
+        if draft:
+            return jsonify(draft.to_dict()), 200
+        else:
+            return jsonify({"error": "Черновик не найден"}), 404
+    except Exception as e:
+        logging.error(f"Ошибка при получении черновика {draft_id}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
+
+# Удалить черновик
+@app.route('/api/drafts/<int:draft_id>', methods=['DELETE'])
+@admin_required("admin")
+def delete_draft_by_id(draft_id):
+    session = Session(bind=engine)
+    try:
+        draft = session.query(ExamSessionDraft).get(draft_id)
+        if not draft:
+            return jsonify({"error": "Черновик не найден"}), 404
+
+        # Удаляем связанные статусы администраторов
+        session.query(AdminStatusDraft).filter_by(session_id=draft_id).delete()
+        session.delete(draft)
+        session.commit()
+        return jsonify({"message": "Черновик успешно удалён"}), 200
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Ошибка при удалении черновика {draft_id}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
