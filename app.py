@@ -304,27 +304,65 @@ def handle_management():
                 "used_faculty": faculty
             })
 
+
         elif action == 'delete_subject':
+
+            active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+
+            if active_draft and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+                get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
+                logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
             subject = data['subject']
+
             sections_to_delete = current_scheduler.exam_groups[
                 current_scheduler.exam_groups['Subject'] == subject
-            ]['Section'].tolist()
+                ]['Section'].tolist()
+
             current_scheduler._delete_sections(sections_to_delete)
+
+            # Update the draft with the latest exam_groups
+
+            if active_draft:
+                active_draft.exams_data = current_scheduler.exams_df.to_json(orient='records')
+                session.commit()
+
             return jsonify({
                 'status': 'success',
                 'message': f'Предмет {subject} удален',
                 'remaining_subjects': current_scheduler.get_unique_subjects()
             })
 
+
+
         elif action == 'delete_section':
+
+            active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+
+            if active_draft and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+                get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
+                logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
             section = data['section']
+
+            if not isinstance(current_scheduler.schedule_df, pd.DataFrame):
+                logging.info("Schedule not yet created, initializing empty schedule_df")
+                current_scheduler.schedule_df = pd.DataFrame(
+                    columns=['Section', 'Date', 'Time_Slot', 'Room', 'Proctor'])
+
             current_scheduler._delete_sections([section])
+
+            # Update the draft with the latest exam_groups
+
+            if active_draft:
+                active_draft.exams_data = current_scheduler.exams_df.to_json(orient='records')
+                session.commit()
+
             return jsonify({
                 'status': 'success',
                 'message': f'Секция {section} удалена',
                 'remaining_subjects': current_scheduler.get_unique_subjects()
             })
-
         elif action == 'generate':
             if user_role != "admin":
                 logging.error(f"Доступ запрещён для роли {user_role}")
