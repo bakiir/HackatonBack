@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import traceback
 from venv import logger
 import bcrypt
+import requests
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, get_jwt
 from services.jwt_service import  admin_required
 from users_db import User, get_or_create_admin_status, set_admin_status_ready, get_all_admin_statuses, are_all_admins_ready
@@ -38,6 +39,41 @@ def handle_nan_values(obj):
         return obj.replace({np.nan: None}).to_dict('records')
     else:
         return obj
+
+
+# это второй варик если ммикросервисный сделаем, сервис уже готов:)
+def send_emails():
+    try:
+        users = session.query(User).filter(User.role.in_([
+            'admin-sdt', 'admin-sem', 'admin-spigu', 'admin_gum'
+        ])).all()
+
+        emails = [user.email for user in users if user.email]
+
+        if not emails:
+            print("Нет админов для отправки.")
+            return
+
+        response = requests.post(
+            "http://localhost:8080/simple",
+            json={
+                "to": emails,
+                "subject": "Привет от шедулера",
+                "body": (
+                    "Письмо отправлено через почтовый сервис. "
+                    "Админ инициализировал все данные и ждет работы с вашей стороны."
+                )
+            },
+            timeout=5
+        )
+
+        print(f"Статус: {response.status_code}, Ответ: {response.text}")
+
+    except Exception as e:
+        print("Ошибка при отправке:", e)
+
+    finally:
+        session.close()
 
 
 app = Flask(__name__)
