@@ -1,5 +1,6 @@
 import tempfile
 import math
+import threading
 from datetime import datetime, timedelta
 import traceback
 from venv import logger
@@ -42,7 +43,7 @@ def handle_nan_values(obj):
 
 
 # это второй варик если ммикросервисный сделаем, сервис уже готов:)
-def send_emails():
+def send_emails_to_admins():
     try:
         users = session.query(User).filter(User.role.in_([
             'admin-sdt', 'admin-sem', 'admin-spigu', 'admin_gum'
@@ -67,14 +68,13 @@ def send_emails():
             timeout=5
         )
 
-        print(f"Статус: {response.status_code}, Ответ: {response.text}")
+        print(f"[EMAIL]: Статус: {response.status_code}, Ответ: {response.text}")
 
     except Exception as e:
-        print("Ошибка при отправке:", e)
+        print(f"[EMAIL ERROR]: {str(e)}")
 
     finally:
         session.close()
-
 
 app = Flask(__name__)
 
@@ -211,6 +211,17 @@ def handle_initialization():
             'message': f'Ошибка инициализации: {str(e)}'
         }), 500
 
+
+@app.route("/api/send_emails_admins")
+@admin_required("admin")
+def send_email_to_admins():
+
+    thread = threading.Thread(target=send_emails_to_admins)
+    thread.start()
+    return jsonify({
+        'status': 'success',
+        'message': 'Фоновая отправка писем запущена.'
+    })
 
 @app.route('/api/manage_dates', methods=['POST'])
 @admin_required("admin")
