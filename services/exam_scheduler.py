@@ -139,7 +139,6 @@ class ExamScheduler:
         """
         Загружает все данные из сохраненной сессии, включая распределение мест
         """
-
         logging.info("Начало загрузки данных из сессии")
 
         try:
@@ -150,14 +149,21 @@ class ExamScheduler:
             self.custom_dates = [session_data.start_date + timedelta(days=i)
                                  for i in range(session_data.days)]
 
-            # 2. Загружаем DataFrame
+            # 2. Загружаем DataFrame с нормализацией
             if session_data.schedule_data:
                 self.schedule_df = pd.read_json(StringIO(session_data.schedule_data))
+                if 'Date' in self.schedule_df.columns:
+                    self.schedule_df['Date'] = pd.to_datetime(
+                        self.schedule_df['Date']).dt.date  # Нормализуем дату к date (без времени)
+                if 'Time_Slot' in self.schedule_df.columns:
+                    self.schedule_df['Time_Slot'] = self.schedule_df['Time_Slot'].str.strip()  # Убираем пробелы
                 logging.info(f"Загружено расписание: {len(self.schedule_df)} записей")
 
             if session_data.exams_data:
                 self.exams_df = pd.read_json(StringIO(session_data.exams_data))
                 self.exams_df['fake_id'] = self.exams_df['fake_id'].astype(str)
+                if 'Subject' in self.exams_df.columns:
+                    self.exams_df['Subject'] = self.exams_df['Subject'].str.strip()  # Убираем пробелы в предметах
                 logging.info(f"Загружены студенты: {len(self.exams_df)} записей")
 
             if session_data.rooms_data:
@@ -166,7 +172,7 @@ class ExamScheduler:
             if session_data.faculties_data:
                 self.faculties_df = pd.read_json(StringIO(session_data.faculties_data))
 
-            # 3. Загружаем распределение мест
+            # 3. Загружаем распределение мест БЕЗ преобразования в кортежи
             self.seat_assignments = {}
             if hasattr(session_data, 'seat_assignments') and session_data.seat_assignments:
                 try:
@@ -176,15 +182,19 @@ class ExamScheduler:
                     if isinstance(loaded_assignments, str):
                         loaded_assignments = json.loads(loaded_assignments)
 
-                    # Преобразуем ключи обратно в кортежи
-                    for key_str, value in loaded_assignments.items():
+                    # Нормализуем ключи как строки (date в 'YYYY-MM-DD', strip остальных)
+                    for key_str, value in list(loaded_assignments.items()):
                         try:
                             # Разбираем ключ (формат: "date|time|subject|student")
                             parts = key_str.split('|')
                             if len(parts) == 4:
-                                date_obj = datetime.strptime(parts[0], "%Y-%m-%d").date()
-                                key = (date_obj, parts[1].strip(), parts[2].strip(), parts[3].strip())
-                                self.seat_assignments[key] = value
+                                date_str = pd.to_datetime(
+                                    parts[0]).date().isoformat()  # Нормализуем дату к 'YYYY-MM-DD'
+                                time = parts[1].strip()
+                                subject = parts[2].strip()
+                                student = parts[3].strip()
+                                normalized_key = f"{date_str}|{time}|{subject}|{student}"
+                                self.seat_assignments[normalized_key] = value
                         except Exception as e:
                             logging.error(f"Ошибка обработки ключа '{key_str}': {str(e)}")
                             continue
@@ -210,6 +220,7 @@ class ExamScheduler:
         except Exception as e:
             logging.error(f"Критическая ошибка загрузки сессии: {traceback.format_exc()}")
             raise ValueError(f"Ошибка загрузки сессии: {str(e)}")
+
 
     def _derive_metadata(self):
         """Извлечение метаданных из существующего расписания"""
