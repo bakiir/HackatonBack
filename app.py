@@ -502,7 +502,7 @@ def set_admin_status_draft():
 def admin_statuses():
     session = Session()
     try:
-        active_session = session.query(ExamSession).filter_by(is_active=True).first()
+        active_session = session.query(ExamSessionDraft).filter_by(is_active=True).first()
         if not active_session:
             return jsonify({"error": "Активная сессия не найдена"}), 404
 
