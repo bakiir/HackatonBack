@@ -1698,7 +1698,7 @@ class ExamScheduler:
                     total_capacity = 0
 
                     # Определяем правильное имя столбца для вместимости
-                    capacity_column = 'Вместимость аудитории' if 'Вместимость аудитории' in self.rooms_df.columns else 'Capacity'
+                    capacity_column = 'Вместительность аудитории' if 'Вместительность аудитории' in self.rooms_df.columns else 'Capacity'
 
                     for room_part in room_parts:
                         try:
