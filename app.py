@@ -448,8 +448,14 @@ def handle_management():
             session.add(new_session)
 
             # Удаляем черновик и связанные статусы
+            # Удаляем черновик и связанные статусы
             session.query(AdminStatusDraft).filter_by(session_id=active_draft.id).delete()
             session.delete(active_draft)
+            session.commit()
+
+            # После успешного создания основной сессии - подчистим все остальные черновики
+            session.query(AdminStatusDraft).delete()  # на всякий случай чистим статусы
+            session.query(ExamSessionDraft).delete()  # удаляем все черновики
             session.commit()
 
             sanitized_schedule = handle_nan_values(current_scheduler.schedule_df)
