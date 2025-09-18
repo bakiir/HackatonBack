@@ -7,6 +7,8 @@ from venv import logger
 import bcrypt
 import requests
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, get_jwt
+from kombu.abstract import Object
+
 from services.jwt_service import  admin_required
 from users_db import User, get_or_create_admin_status, set_admin_status_ready, get_all_admin_statuses, are_all_admins_ready
 from flask import Flask, jsonify, send_file
@@ -497,6 +499,24 @@ def set_admin_status_draft():
         return jsonify({"error": str(e)}), 500
     finally:
         session.close()
+
+@app.route('/api/check_all_drafts', methods=['GET'])
+@admin_required("admin")
+def check_all_drafts():
+    session = Session()
+    try:
+        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        if not active_draft:
+            return jsonify({"have_drafts": False}), 200
+
+        all_ready = are_all_admins_ready(session, active_draft.id, model=AdminStatusDraft)
+        return jsonify({"have_drafts": all_ready}), 200
+    except Exception as e:
+        logging.error(f"Ошибка при проверке статусов: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session.close()
+
 @app.route('/api/admin_statuses', methods=['GET'])
 @admin_required("admin")
 def admin_statuses():
