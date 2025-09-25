@@ -283,13 +283,9 @@ class ExamScheduler:
         """
         logging.info(f"Получение списка предметов для факультета: {faculty}")
 
-        if not hasattr(self, 'subject_faculty_map') or not self.subject_faculty_map:
-            logging.error("subject_faculty_map не инициализирован или пуст")
-            return []
-
         try:
-            # Ищем предметы, у которых указанный факультет есть в множестве факультетов
-            subjects = [subject for subject, faculties in self.subject_faculty_map.items() if faculty in faculties]
+            # Ищем предметы из exams_df, где указанный факультет есть в столбце Faculty
+            subjects = self.exams_df[self.exams_df['Faculty'] == faculty]['Subject'].unique()
             subjects = sorted(subjects)  # Сортируем для консистентности
             logging.info(f"Найдено {len(subjects)} уникальных предметов для факультета {faculty}")
             return subjects
