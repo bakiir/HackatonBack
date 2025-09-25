@@ -1189,11 +1189,20 @@ def update_proctor_status():
     user_role = claims.get('role')
     session = Session()
     try:
+        # Проверяем наличие активного черновика
         active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
-        if active_draft and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+        if not active_draft:
+            return jsonify({
+                'status': 'error',
+                'message': 'Активный черновик не найден'
+            }), 404
+
+        # Устанавливаем статус 'in_progress' для администратора
+        if user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
             get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
             logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
 
+        # Проверяем входные данные
         data = request.json
         if not data or 'exams' not in data:
             return jsonify({
@@ -1201,12 +1210,24 @@ def update_proctor_status():
                 'message': 'Не предоставлены данные об экзаменах'
             }), 400
 
+        # Обновляем proctor_needed в exam_groups
         for exam in data['exams']:
             section_id = exam.get('section_id')
             proctor_needed = exam.get('proctor_needed', False)
+            if section_id not in current_scheduler.exam_groups['Section'].values:
+                logging.warning(f"Секция {section_id} не найдена в exam_groups")
+                continue
             current_scheduler.exam_groups.loc[
                 current_scheduler.exam_groups['Section'] == section_id, 'proctor_needed'
             ] = proctor_needed
+            logging.info(f"Обновлён proctor_needed={proctor_needed} для секции {section_id}")
+
+        # Синхронизируем exam_groups с exams_data в базе
+        active_draft.exams_data = current_scheduler.exam_groups.to_json(orient='records')
+
+        # Фиксируем изменения в базе
+        session.commit()
+        logging.info("Изменения в базе данных успешно зафиксированы")
 
         return jsonify({
             'status': 'success',
@@ -1214,7 +1235,8 @@ def update_proctor_status():
         }), 200
 
     except Exception as e:
-        logging.error(f"Ошибка при обновлении статуса прокторинга: {str(e)}")
+        session.rollback()
+        logging.error(f"Ошибка при обновлении статуса прокторинга: {traceback.format_exc()}")
         return jsonify({
             'status': 'error',
             'message': f'Ошибка при обновлении статуса прокторинга: {str(e)}'
