@@ -5,7 +5,7 @@ import re
 import statistics
 import traceback
 from collections import defaultdict
-from itertools import combinations
+from fuzzywuzzy import process
 
 import pandas as pd
 from datetime import datetime, timedelta
@@ -1728,179 +1728,169 @@ class ExamScheduler:
         logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
 
     def assign_seats(self):
-            """
-            Распределяет студентов по аудиториям с учетом вместимости и требования двух комнат,
-            сохраняя информацию о местах в seat_assignments.
-            """
-            if not hasattr(self, 'schedule_df') or self.schedule_df.empty:
-                logging.warning("Нет данных расписания для распределения мест")
-                return
+        """
+        Распределяет студентов по аудиториям с учетом вместимости и требования двух комнат,
+        сохраняя информацию о местах в seat_assignments.
+        """
+        if not hasattr(self, 'schedule_df') or self.schedule_df.empty:
+            logging.warning("Нет данных расписания для распределения мест")
+            return
 
-            # Log rooms_df contents
-            logging.info(
-                f"Содержимое rooms_df: {self.rooms_df.to_dict() if not self.rooms_df.empty else 'Пустой DataFrame'}")
-            logging.info(
-                f"Колонки rooms_df: {list(self.rooms_df.columns) if not self.rooms_df.empty else 'Нет колонок'}")
+        # Log rooms_df contents
+        logging.info(
+            f"Содержимое rooms_df: {self.rooms_df.to_dict() if not self.rooms_df.empty else 'Пустой DataFrame'}")
+        logging.info(
+            f"Колонки rooms_df: {list(self.rooms_df.columns) if not self.rooms_df.empty else 'Нет колонок'}")
 
-            self.seat_assignments = {}  # Очищаем предыдущее распределение
-            total_assigned = 0
-            problem_sections = []
-
-            for _, exam in self.schedule_df.iterrows():
+        # Кэшируем room_capacities с преобразованием к int
+        capacity_column = 'Вместительность аудитории' if 'Вместительность аудитории' in self.rooms_df.columns else 'Capacity'
+        room_capacities = {}
+        if not self.rooms_df.empty and capacity_column in self.rooms_df.columns:
+            for _, row in self.rooms_df.iterrows():
+                room_name = str(row['Аудитория']).strip().lower()  # Очистка: strip + lower
                 try:
-                    required_fields = ['Date', 'Time_Slot', 'Subject', 'Section', 'Room', 'Instructor']
-                    if not all(field in exam and pd.notna(exam[field]) for field in required_fields):
-                        problem_sections.append(exam.get('Section', 'unknown'))
-                        logging.error(
-                            f"Отсутствуют обязательные поля в секции {exam.get('Section', 'unknown')}: {exam.to_dict()}")
-                        continue
+                    capacity = int(row[capacity_column])
+                except (ValueError, TypeError):
+                    logging.warning(f"Некорректная вместимость для {room_name}: {row[capacity_column]}. Используем 25.")
+                    capacity = 25
+                room_capacities[room_name] = capacity
+        logging.info(f"Кэшированные вместимости: {room_capacities}")
 
-                    students = self.get_students_for_section(exam['Section'])
-                    if not students:
-                        logging.warning(f"Нет студентов в секции {exam['Section']}")
-                        continue
+        self.seat_assignments = {}
+        total_assigned = 0
+        problem_sections = []
 
-                    two_rooms_needed = \
-                    self.exam_groups[self.exam_groups['Section'] == exam['Section']]['two_rooms_needed'].iloc[0] if \
-                    exam['Section'] in self.exam_groups['Section'].values else False
-                    logging.info(
-                        f"Секция {exam['Section']}: two_rooms_needed={two_rooms_needed}, студентов={len(students)}")
-
-                    # Парсим информацию об аудиториях (формат: "510,511" или "510(28) + 511(28)")
-                    rooms = []
-                    room_string = str(exam['Room']).strip()
-                    room_parts = [part.strip() for part in room_string.replace(',', '+').split('+')]
-                    total_capacity = 0
-
-                    # Определяем правильное имя столбца для вместимости
-                    capacity_column = 'Вместительность аудитории' if 'Вместительность аудитории' in self.rooms_df.columns else 'Capacity'
-
-                    for room_part in room_parts:
-                        try:
-                            match = re.match(r'(\S+)\((\d+)\)', room_part)
-                            if match:
-                                room_name, capacity = match.groups()
-                                room_name = room_name.strip()
-                                capacity = int(capacity)
-                                if not self.rooms_df.empty and room_name in self.rooms_df['Аудитория'].values:
-                                    actual_capacity = \
-                                    self.rooms_df[self.rooms_df['Аудитория'] == room_name][capacity_column].iloc[0]
-                                    rooms.append((room_name, actual_capacity))
-                                    total_capacity += actual_capacity
-                                else:
-                                    rooms.append((room_name, capacity))
-                                    total_capacity += capacity
-                            else:
-                                room_name = room_part.strip()
-                                if not self.rooms_df.empty and room_name in self.rooms_df['Аудитория'].values:
-                                    capacity = \
-                                    self.rooms_df[self.rooms_df['Аудитория'] == room_name][capacity_column].iloc[0]
-                                else:
-                                    logging.warning(
-                                        f"Аудитория '{room_name}' не найдена в rooms_df для секции {exam['Section']}. Используем дефолтную вместимость 25.")
-                                    capacity = 25
-                                rooms.append((room_name, capacity))
-                                total_capacity += capacity
-                        except Exception as e:
-                            logging.error(
-                                f"Ошибка парсинга аудитории '{room_part}' для секции {exam['Section']}: {str(e)}")
-                            problem_sections.append(exam['Section'])
-                            continue
-
-                    if two_rooms_needed and len(rooms) != 2:
-                        logging.error(
-                            f"Секция {exam['Section']} требует две аудитории, но найдено {len(rooms)}: {rooms}")
-                        if len(rooms) < 2 and not self.rooms_df.empty:
-                            available_rooms = self.rooms_df[~self.rooms_df['Аудитория'].isin([r[0] for r in rooms])][
-                                'Аудитория'].tolist()
-                            if available_rooms:
-                                new_room = available_rooms[0]
-                                try:
-                                    new_capacity = \
-                                    self.rooms_df[self.rooms_df['Аудитория'] == new_room][capacity_column].iloc[0]
-                                except KeyError as e:
-                                    logging.error(
-                                        f"Отсутствует столбец '{capacity_column}' в rooms_df для аудитории {new_room}: {str(e)}")
-                                    new_capacity = 25
-                                rooms.append((new_room, new_capacity))
-                                total_capacity += new_capacity
-                                logging.info(
-                                    f"Добавлена аудитория {new_room}({new_capacity}) для секции {exam['Section']}")
-                            else:
-                                logging.error(f"Нет доступных аудиторий для добавления в секцию {exam['Section']}")
-                                problem_sections.append(exam['Section'])
-                                continue
-
-                    if total_capacity < len(students):
-                        logging.error(
-                            f"Недостаточная вместимость ({total_capacity}) для {len(students)} студентов в секции {exam['Section']}")
-                        if not two_rooms_needed and not self.rooms_df.empty:
-                            available_rooms = self.rooms_df[~self.rooms_df['Аудитория'].isin([r[0] for r in rooms])][
-                                'Аудитория'].tolist()
-                            for new_room in available_rooms:
-                                try:
-                                    new_capacity = \
-                                    self.rooms_df[self.rooms_df['Аудитория'] == new_room][capacity_column].iloc[0]
-                                except KeyError as e:
-                                    logging.error(
-                                        f"Отсутствует столбец '{capacity_column}' в rooms_df для аудитории {new_room}: {str(e)}")
-                                    new_capacity = 25
-                                rooms.append((new_room, new_capacity))
-                                total_capacity += new_capacity
-                                logging.info(
-                                    f"Добавлена аудитория {new_room}({new_capacity}) для секции {exam['Section']}")
-                                if total_capacity >= len(students):
-                                    break
-                            if total_capacity < len(students):
-                                logging.error(
-                                    f"После добавления аудиторий всё ещё недостаточная вместимость ({total_capacity}) для {len(students)} студентов в секции {exam['Section']}")
-                                problem_sections.append(exam['Section'])
-                                continue
-                        else:
-                            problem_sections.append(exam['Section'])
-                            continue
-
-                    random.shuffle(students)
-                    student_index = 0
-                    students_per_room = len(students) // len(rooms) + (1 if len(students) % len(rooms) else 0)
-                    exam_date = pd.to_datetime(exam['Date']).date()
-
-                    for room_name, capacity in rooms:
-                        assigned_to_room = 0
-                        for seat_num in range(1, min(capacity + 1, students_per_room + 1)):
-                            if student_index >= len(students):
-                                break
-                            student_id = str(students[student_index])
-                            key = f"{exam_date}|{exam['Time_Slot'].strip()}|{exam['Subject'].strip()}|{student_id}"
-                            self.seat_assignments[key] = {
-                                'seat': seat_num,
-                                'room': room_name,
-                                'section': exam['Section'],
-                                'subject': exam['Subject'],
-                                'date': exam_date.isoformat(),
-                                'time_slot': exam['Time_Slot']
-                            }
-                            student_index += 1
-                            assigned_to_room += 1
-                            total_assigned += 1
-
-                    if student_index < len(students):
-                        logging.warning(
-                            f"Не все студенты распределены для секции {exam['Section']}: {len(students) - student_index} остались")
-                        problem_sections.append(exam['Section'])
-
-                except Exception as e:
-                    section = exam.get('Section', 'unknown')
-                    problem_sections.append(section)
-                    logging.error(f"Ошибка распределения мест для секции {section}: {str(e)}", exc_info=True)
+        for _, exam in self.schedule_df.iterrows():
+            try:
+                required_fields = ['Date', 'Time_Slot', 'Subject', 'Section', 'Room', 'Instructor']
+                if not all(field in exam and pd.notna(exam[field]) for field in required_fields):
+                    problem_sections.append(exam.get('Section', 'unknown'))
+                    logging.error(
+                        f"Отсутствуют обязательные поля в секции {exam.get('Section', 'unknown')}: {exam.to_dict()}")
                     continue
 
-            logging.info(f"Успешно распределено мест: {total_assigned}")
-            if problem_sections:
-                logging.warning(f"Проблемы в секциях: {set(problem_sections)}")
-            if self.seat_assignments:
-                sample_key = next(iter(self.seat_assignments))
-                logging.info(f"Пример распределения: {sample_key} => {self.seat_assignments[sample_key]}")
+                students = self.get_students_for_section(exam['Section'])
+                if not students:
+                    logging.warning(f"Нет студентов в секции {exam['Section']}")
+                    continue
+
+                two_rooms_needed = (
+                    self.exam_groups[self.exam_groups['Section'] == exam['Section']]['two_rooms_needed'].iloc[0]
+                    if exam['Section'] in self.exam_groups['Section'].values else False
+                )
+                logging.info(
+                    f"Секция {exam['Section']}: two_rooms_needed={two_rooms_needed}, студентов={len(students)}, Room={exam['Room']}")
+
+                # Парсим аудитории из schedule_df
+                room_string = str(exam['Room']).strip().lower()  # Очистка: strip + lower
+                rooms = []
+                total_capacity = 0
+
+                if two_rooms_needed:
+                    # Для two_rooms_needed ожидаем формат "room1,room2"
+                    room_parts = [part.strip().lower() for part in room_string.split(',')]  # Очистка частей
+                    if len(room_parts) != 2:
+                        logging.error(
+                            f"Секция {exam['Section']} требует две аудитории, но найдено {len(room_parts)}: {room_parts}")
+                        problem_sections.append(exam['Section'])
+                        continue
+                else:
+                    # Для одной комнаты используем только указанную аудиторию
+                    room_parts = [room_string]
+
+                for room_part in room_parts:
+                    try:
+                        match = re.match(r'(\S+)\((\d+)\)', room_part)
+                        room_name = match.group(1).strip().lower() if match else room_part.strip().lower()
+                        capacity = int(match.group(2)) if match else room_capacities.get(room_name, 25)
+
+                        if room_name not in room_capacities:
+                            logging.warning(
+                                f"Аудитория '{room_name}' не найдена в rooms_df для секции {exam['Section']}. "
+                                f"Используем вместимость {capacity}.")
+                        else:
+                            capacity = room_capacities[room_name]
+                            logging.info(f"Аудитория {room_name} найдена, вместимость: {capacity}")
+
+                        rooms.append((room_name, capacity))
+                        total_capacity += capacity
+                    except Exception as e:
+                        logging.error(
+                            f"Ошибка парсинга аудитории '{room_part}' для секции {exam['Section']}: {str(e)}")
+                        problem_sections.append(exam['Section'])
+                        continue
+
+                # Проверка вместимости
+                if total_capacity < len(students):
+                    logging.error(
+                        f"Недостаточная вместимость ({total_capacity}) для {len(students)} студентов в секции {exam['Section']}")
+                    if not two_rooms_needed:
+                        # Пробуем добавить одну аудиторию
+                        available_rooms = [
+                            r for r in room_capacities.keys()
+                            if r not in [room[0] for room in rooms]
+                               and room_capacities[r] >= len(students) - total_capacity
+                        ]
+                        if available_rooms:
+                            new_room = available_rooms[0]
+                            new_capacity = room_capacities[new_room]
+                            rooms.append((new_room, new_capacity))
+                            total_capacity += new_capacity
+                            logging.info(
+                                f"Добавлена аудитория {new_room}({new_capacity}) для секции {exam['Section']}")
+                        else:
+                            logging.error(f"Нет подходящих аудиторий для секции {exam['Section']}")
+                            problem_sections.append(exam['Section'])
+                            continue
+                    else:
+                        problem_sections.append(exam['Section'])
+                        continue
+
+                # Распределение студентов
+                random.shuffle(students)
+                student_index = 0
+                exam_date = pd.to_datetime(exam['Date']).date()
+
+                for room_name, capacity in rooms:
+                    assigned_to_room = 0
+                    # Ограничиваем количество студентов в комнате её вместимостью
+                    for seat_num in range(1, capacity + 1):
+                        if student_index >= len(students):
+                            break
+                        student_id = str(students[student_index])
+                        key = f"{exam_date}|{exam['Time_Slot'].strip()}|{exam['Subject'].strip()}|{student_id}"
+                        self.seat_assignments[key] = {
+                            'seat': seat_num,
+                            'room': room_name,
+                            'section': exam['Section'],
+                            'subject': exam['Subject'],
+                            'date': exam_date.isoformat(),
+                            'time_slot': exam['Time_Slot']
+                        }
+                        student_index += 1
+                        assigned_to_room += 1
+                        total_assigned += 1
+
+                    if assigned_to_room == 0:
+                        logging.warning(
+                            f"Не распределены студенты в аудиторию {room_name} для секции {exam['Section']}")
+
+                if student_index < len(students):
+                    logging.warning(
+                        f"Не все студенты распределены для секции {exam['Section']}: {len(students) - student_index} остались")
+                    problem_sections.append(exam['Section'])
+
+            except Exception as e:
+                section = exam.get('Section', 'unknown')
+                problem_sections.append(section)
+                logging.error(f"Ошибка распределения мест для секции {section}: {str(e)}", exc_info=True)
+
+        logging.info(f"Успешно распределено мест: {total_assigned}")
+        if problem_sections:
+            logging.warning(f"Проблемы в секциях: {set(problem_sections)}")
+        if self.seat_assignments:
+            sample_key = next(iter(self.seat_assignments))
+            logging.info(f"Пример распределения: {sample_key} => {self.seat_assignments[sample_key]}")
 
     def validate_schedule(self):
         """Validates the schedule before finalizing"""
