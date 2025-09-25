@@ -489,7 +489,7 @@ class ExamScheduler:
         non_sct_proctor_load = {proctor: 0 for proctor in non_sct_proctors}
 
         # Максимальная нагрузка на проктора
-        MAX_PROCTOR_LOAD = 10
+        MAX_PROCTOR_LOAD = 100
 
         for _, row in self.schedule_df.iterrows():
             section_id = row['Section']
@@ -498,9 +498,7 @@ class ExamScheduler:
             room = row['Room']
             proctor_needed = row.get('proctor_needed', True)
 
-            # Получаем информацию о two_rooms_needed из exam_groups
-            group = self.exam_groups[self.exam_groups['Section'] == section_id]
-            two_rooms_needed = group['two_rooms_needed'].iloc[0] if not group.empty else False
+            two_rooms_needed = row.get('two_rooms_needed', False)
 
             if not proctor_needed:
                 section_proctors[section_id] = {
@@ -701,7 +699,7 @@ class ExamScheduler:
         return student_sections
 
     def create_schedule(self):
-        logging.info("Начало создания расписания")
+        logging.info("Начало создания расписания с группировкой по предметам")
         self.schedule = []
         self.student_exams = {}  # Для отслеживания экзаменов студентов
         success_count = 0
@@ -722,165 +720,232 @@ class ExamScheduler:
                 for day in self.custom_dates
             }
 
-            # 3. Сортировка групп по количеству студентов и степени конфликтов
-            exam_groups['student_count'] = exam_groups['Section'].map(
-                lambda x: len(self.exams_df[self.exams_df['Section'] == x])
-            )
+            # 3. НОВАЯ ЛОГИКА: Группировка по предметам
+            subjects_groups = {}
+            for _, group in exam_groups.iterrows():
+                subject = group['Subject']
+                if subject not in subjects_groups:
+                    subjects_groups[subject] = []
+                subjects_groups[subject].append(group)
 
-            student_to_sections = defaultdict(set)
-            for section in exam_groups['Section'].unique():
-                section_students = self.exams_df[self.exams_df['Section'] == section]['fake_id'].unique()
-                for student in section_students:
-                    student_to_sections[student].add(section)
+            # Сортируем предметы по общему количеству студентов (самые большие предметы первыми)
+            def get_subject_total_students(subject):
+                total = 0
+                for group in subjects_groups[subject]:
+                    section_students = self.exams_df[self.exams_df['Section'] == group['Section']]['fake_id'].unique()
+                    total += len(section_students)
+                return total
 
-            section_conflicts = {}
-            for section in exam_groups['Section'].unique():
-                section_students = set(self.exams_df[self.exams_df['Section'] == section]['fake_id'].unique())
-                related_sections = set()
-                for student in section_students:
-                    related_sections.update(student_to_sections[student])
-                section_conflicts[section] = len(related_sections) - 1
+            sorted_subjects = sorted(subjects_groups.keys(),
+                                     key=get_subject_total_students,
+                                     reverse=True)
 
-            exam_groups['conflict_degree'] = exam_groups['Section'].map(section_conflicts)
-            exam_groups = exam_groups.sort_values(by=['conflict_degree', 'student_count'], ascending=False)
+            logging.info(f"Найдено {len(sorted_subjects)} уникальных предметов для планирования")
 
-            # 4. Учёт нагрузки по дням
+            # 4. Учёт нагрузки по дням и конфликтов студентов
             day_load = {day.strftime('%Y-%m-%d'): 0 for day in self.custom_dates}
             student_exams_per_day = defaultdict(lambda: defaultdict(int))
 
-            # 5. Первый проход: планирование с жёсткими ограничениями
-            for _, group in exam_groups.iterrows():
-                section = group['Section']
-                students = self.exams_df[self.exams_df['Section'] == section]['fake_id'].tolist()
-                num_students = len(students)
-                duration = int(group.get('Duration', 180))  # 180 минут по умолчанию
-                instructor = group['Instructor']
-                proctor_needed = group.get('proctor_needed', False)
-                two_rooms_needed = group.get('two_rooms_needed', False)  # Новое поле
+            # 5. Планирование по предметам
+            current_day_index = 0  # Индекс текущего дня для размещения
 
-                best_slots = []
+            for subject in sorted_subjects:
+                logging.info(f"Планирование экзаменов по предмету: {subject}")
+                subject_groups = subjects_groups[subject]
 
-                for day in self.custom_dates:
-                    exam_date = day.strftime('%Y-%m-%d')
-                    day_conflicts = sum(1 for student in students if student_exams_per_day[student][exam_date] >= 1)
-                    if day_conflicts > 0:
-                        continue
+                # Сортируем группы внутри предмета по количеству студентов и степени конфликтов
+                subject_groups_df = pd.DataFrame(subject_groups)
+                subject_groups_df['student_count'] = subject_groups_df['Section'].map(
+                    lambda x: len(self.exams_df[self.exams_df['Section'] == x])
+                )
 
-                    load_cost = day_load[exam_date]
+                # Вычисляем степень конфликтов для групп этого предмета
+                student_to_sections = defaultdict(set)
+                for group in subject_groups:
+                    section = group['Section']
+                    section_students = self.exams_df[self.exams_df['Section'] == section]['fake_id'].unique()
+                    for student in section_students:
+                        student_to_sections[student].add(section)
 
-                    for slot in self.time_slots:
-                        start, end = slot.split('-')
-                        slot_start_dt = datetime.strptime(start, '%H:%M')
-                        slot_end_dt = datetime.strptime(end, '%H:%M')
-                        slot_duration = (slot_end_dt - slot_start_dt).total_seconds() / 60
-                        if slot_duration < duration:
+                section_conflicts = {}
+                for group in subject_groups:
+                    section = group['Section']
+                    section_students = set(self.exams_df[self.exams_df['Section'] == section]['fake_id'].unique())
+                    related_sections = set()
+                    for student in section_students:
+                        related_sections.update(student_to_sections[student])
+                    section_conflicts[section] = len(related_sections) - 1
+
+                subject_groups_df['conflict_degree'] = subject_groups_df['Section'].map(section_conflicts)
+                subject_groups_df = subject_groups_df.sort_values(by=['conflict_degree', 'student_count'],
+                                                                  ascending=False)
+
+                # Планируем группы этого предмета подряд, начиная с текущего дня
+                subject_failed = []
+
+                for _, group in subject_groups_df.iterrows():
+                    section = group['Section']
+                    students = self.exams_df[self.exams_df['Section'] == section]['fake_id'].tolist()
+                    num_students = len(students)
+                    duration = int(group.get('Duration', 180))
+                    instructor = group['Instructor']
+                    proctor_needed = group.get('proctor_needed', False)
+                    two_rooms_needed = group.get('two_rooms_needed', False)
+
+                    scheduled = False
+
+                    # Пробуем разместить в текущие доступные дни, начиная с current_day_index
+                    for day_offset in range(len(self.custom_dates)):
+                        day_idx = (current_day_index + day_offset) % len(self.custom_dates)
+                        day = self.custom_dates[day_idx]
+                        exam_date = day.strftime('%Y-%m-%d')
+
+                        # Проверяем конфликты студентов на этот день
+                        day_conflicts = sum(1 for student in students if student_exams_per_day[student][exam_date] >= 1)
+
+                        # Если есть жесткие конфликты (студент уже имеет экзамен в этот день), пробуем следующий день
+                        if day_conflicts > 0:
                             continue
 
-                        actual_end = (slot_start_dt + timedelta(minutes=duration)).strftime('%H:%M')
-                        actual_slot = f"{start}-{actual_end}"
+                        # Пробуем временные слоты
+                        for slot in self.time_slots:
+                            start, end = slot.split('-')
+                            slot_start_dt = datetime.strptime(start, '%H:%M')
+                            slot_end_dt = datetime.strptime(end, '%H:%M')
+                            slot_duration = (slot_end_dt - slot_start_dt).total_seconds() / 60
 
-                        instructor_busy = any(
-                            exam['Instructor'] == instructor and
-                            exam['Date'] == exam_date and
-                            exam['Time_Slot'] == slot
-                            for exam in self.schedule
-                        )
-                        if instructor_busy:
-                            continue
+                            if slot_duration < duration:
+                                continue
 
-                        conflicts = 0
-                        for student in students:
-                            if student in self.student_exams:
-                                for exam in self.student_exams[student]:
-                                    if exam['Date'] == exam_date:
-                                        exam_start = datetime.strptime(exam['Time_Slot'].split('-')[0], '%H:%M')
-                                        exam_end = datetime.strptime(exam['Time_Slot'].split('-')[1], '%H:%M')
-                                        curr_start = slot_start_dt
-                                        curr_end = slot_start_dt + timedelta(minutes=duration)
-                                        if curr_start < exam_end and exam_start < curr_end:
-                                            conflicts += 1
-                                            break
-                                if conflicts > 0:
-                                    break
+                            actual_end = (slot_start_dt + timedelta(minutes=duration)).strftime('%H:%M')
+                            actual_slot = f"{start}-{actual_end}"
 
-                        if conflicts > 0:
-                            continue
+                            # Проверяем доступность преподавателя
+                            instructor_busy = any(
+                                exam['Instructor'] == instructor and
+                                exam['Date'] == exam_date and
+                                exam['Time_Slot'] == slot
+                                for exam in self.schedule
+                            )
+                            if instructor_busy:
+                                continue
 
-                        # Поиск аудиторий
-                        available_rooms = [
-                            room for room in self.rooms
-                            if room not in self.room_usage[day][slot]
-                        ]
+                            # Проверяем временные конфликты у студентов
+                            time_conflicts = 0
+                            for student in students:
+                                if student in self.student_exams:
+                                    for exam in self.student_exams[student]:
+                                        if exam['Date'] == exam_date:
+                                            exam_start = datetime.strptime(exam['Time_Slot'].split('-')[0], '%H:%M')
+                                            exam_end = datetime.strptime(exam['Time_Slot'].split('-')[1], '%H:%M')
+                                            curr_start = slot_start_dt
+                                            curr_end = slot_start_dt + timedelta(minutes=duration)
+                                            if curr_start < exam_end and exam_start < curr_end:
+                                                time_conflicts += 1
+                                                break
+                                    if time_conflicts > 0:
+                                        break
 
-                        if two_rooms_needed:
-                            # Нужны две аудитории
-                            room_pairs = list(combinations(available_rooms, 2))
-                            for room1, room2 in room_pairs:
-                                if self.room_capacities[room1] + self.room_capacities[room2] >= num_students:
-                                    room = f"{room1},{room2}"
-                                    best_slots.append((day, slot, actual_slot, room, load_cost))
-                                    break
-                        else:
-                            # Нужна одна аудитория
+                            if time_conflicts > 0:
+                                continue
+
+                            # Поиск аудиторий
                             available_rooms = [
-                                room for room in available_rooms
-                                if self.room_capacities[room] >= num_students
+                                room for room in self.rooms
+                                if room not in self.room_usage[day][slot]
                             ]
-                            if available_rooms:
-                                room = available_rooms[0]
-                                best_slots.append((day, slot, actual_slot, room, load_cost))
 
-                if best_slots:
-                    best_day, best_base_slot, best_actual_slot, best_room, _ = min(
-                        best_slots, key=lambda x: x[4]
-                    )
-                    exam_date = best_day.strftime('%Y-%m-%d')
+                            suitable_room = None
+                            if two_rooms_needed:
+                                # Нужны две аудитории
+                                from itertools import combinations
+                                room_pairs = list(combinations(available_rooms, 2))
+                                for room1, room2 in room_pairs:
+                                    if self.room_capacities[room1] + self.room_capacities[room2] >= num_students:
+                                        suitable_room = f"{room1},{room2}"
+                                        break
+                            else:
+                                # Нужна одна аудитория
+                                suitable_rooms = [
+                                    room for room in available_rooms
+                                    if self.room_capacities[room] >= num_students
+                                ]
+                                if suitable_rooms:
+                                    suitable_room = suitable_rooms[0]
 
-                    exam_record = {
-                        'Date': exam_date,
-                        'Subject': group['Subject'],
-                        'Instructor': instructor,
-                        'EduProgram': group['EduProgram'],
-                        'Section': section,
-                        'Students_Count': num_students,
-                        'Room': best_room,  # Для двух аудиторий: "room1,room2"
-                        'Time_Slot': best_actual_slot,
-                        'Base_Time_Slot': best_base_slot,
-                        'Duration': duration,
-                        'Student_Conflicts': 0,
-                        'proctor_needed': proctor_needed
-                    }
+                            if suitable_room:
+                                # Размещаем экзамен
+                                exam_record = {
+                                    'Date': exam_date,
+                                    'Subject': group['Subject'],
+                                    'Instructor': instructor,
+                                    'EduProgram': group['EduProgram'],
+                                    'Section': section,
+                                    'Students_Count': num_students,
+                                    'Room': suitable_room,
+                                    'Time_Slot': actual_slot,
+                                    'Base_Time_Slot': slot,
+                                    'Duration': duration,
+                                    'Student_Conflicts': 0,
+                                    'proctor_needed': proctor_needed,
+                                    'two_rooms_needed': two_rooms_needed
+                                }
 
-                    self.schedule.append(exam_record)
-                    if ',' in best_room:
-                        room1, room2 = best_room.split(',')
-                        self.room_usage[best_day][best_base_slot].add(room1)
-                        self.room_usage[best_day][best_base_slot].add(room2)
-                    else:
-                        self.room_usage[best_day][best_base_slot].add(best_room)
+                                self.schedule.append(exam_record)
 
-                    for student in students:
-                        if student not in self.student_exams:
-                            self.student_exams[student] = []
-                        self.student_exams[student].append(exam_record)
-                        student_exams_per_day[student][exam_date] += 1
+                                # Отмечаем аудитории как занятые
+                                if ',' in suitable_room:
+                                    room1, room2 = suitable_room.split(',')
+                                    self.room_usage[day][slot].add(room1)
+                                    self.room_usage[day][slot].add(room2)
+                                else:
+                                    self.room_usage[day][slot].add(suitable_room)
 
-                    success_count += 1
-                    day_load[exam_date] += 1
-                else:
-                    failed_sections.append({
-                        'section': section,
-                        'students': students,
-                        'num_students': num_students,
-                        'instructor': instructor,
-                        'duration': duration,
-                        'proctor_needed': proctor_needed,
-                        'group': group
-                    })
+                                # Обновляем информацию о студентах
+                                for student in students:
+                                    if student not in self.student_exams:
+                                        self.student_exams[student] = []
+                                    self.student_exams[student].append(exam_record)
+                                    student_exams_per_day[student][exam_date] += 1
 
-            # 6. Второй проход: размещаем оставшиеся секции
+                                success_count += 1
+                                day_load[exam_date] += 1
+                                scheduled = True
+
+                                # Если это первый экзамен предмета в новом дне, обновляем current_day_index
+                                if day_idx > current_day_index:
+                                    current_day_index = day_idx
+
+                                logging.info(
+                                    f"Запланирован экзамен {section} на {exam_date} {actual_slot} в {suitable_room}")
+                                break
+
+                        if scheduled:
+                            break
+
+                    if not scheduled:
+                        subject_failed.append({
+                            'section': section,
+                            'students': students,
+                            'num_students': num_students,
+                            'instructor': instructor,
+                            'duration': duration,
+                            'proctor_needed': proctor_needed,
+                            'group': group
+                        })
+
+                failed_sections.extend(subject_failed)
+
+                # После планирования всех групп предмета, переходим к следующему дню для следующего предмета
+                # чтобы обеспечить разделение предметов по дням
+                current_day_index = (current_day_index + 1) % len(self.custom_dates)
+
+                logging.info(
+                    f"Завершено планирование предмета {subject}. Запланировано: {len(subject_groups) - len(subject_failed)} из {len(subject_groups)} групп")
+
+            # 6. Второй проход для незапланированных секций (с ослабленными ограничениями)
             if failed_sections:
-                logging.info(f"Первый проход завершён. Не удалось запланировать {len(failed_sections)} секций.")
+                logging.info(f"Второй проход для {len(failed_sections)} незапланированных секций")
                 remaining_sections = failed_sections
                 failed_sections = []
 
@@ -894,11 +959,10 @@ class ExamScheduler:
                     group = failed['group']
                     two_rooms_needed = group.get('two_rooms_needed', False)
 
-                    best_slots = []
+                    scheduled = False
                     for day in self.custom_dates:
                         exam_date = day.strftime('%Y-%m-%d')
                         day_conflicts = sum(1 for student in students if student_exams_per_day[student][exam_date] >= 1)
-                        load_cost = day_load[exam_date]
 
                         for slot in self.time_slots:
                             start, end = slot.split('-')
@@ -920,6 +984,7 @@ class ExamScheduler:
                             if instructor_busy:
                                 continue
 
+                            # Во втором проходе разрешаем конфликты студентов
                             conflicts = 0
                             for student in students:
                                 if student in self.student_exams:
@@ -932,71 +997,70 @@ class ExamScheduler:
                                             if curr_start < exam_end and exam_start < curr_end:
                                                 conflicts += 1
                                                 break
-                                    if conflicts > 0:
-                                        break
-
-                            if conflicts > 0:
-                                continue
+                                if conflicts > 0:
+                                    break
 
                             available_rooms = [
                                 room for room in self.rooms
                                 if room not in self.room_usage[day][slot]
                             ]
 
+                            suitable_room = None
                             if two_rooms_needed:
+                                from itertools import combinations
                                 room_pairs = list(combinations(available_rooms, 2))
                                 for room1, room2 in room_pairs:
                                     if self.room_capacities[room1] + self.room_capacities[room2] >= num_students:
-                                        room = f"{room1},{room2}"
-                                        best_slots.append((day, slot, actual_slot, room, day_conflicts, load_cost))
+                                        suitable_room = f"{room1},{room2}"
                                         break
                             else:
-                                available_rooms = [
+                                suitable_rooms = [
                                     room for room in available_rooms
                                     if self.room_capacities[room] >= num_students
                                 ]
-                                if available_rooms:
-                                    room = available_rooms[0]
-                                    best_slots.append((day, slot, actual_slot, room, day_conflicts, load_cost))
+                                if suitable_rooms:
+                                    suitable_room = suitable_rooms[0]
 
-                    if best_slots:
-                        best_day, best_base_slot, best_actual_slot, best_room, conflict_cost, _ = min(
-                            best_slots, key=lambda x: (x[4], x[5])
-                        )
-                        exam_date = best_day.strftime('%Y-%m-%d')
+                            if suitable_room:
+                                exam_record = {
+                                    'Date': exam_date,
+                                    'Subject': group['Subject'],
+                                    'Instructor': instructor,
+                                    'EduProgram': group['EduProgram'],
+                                    'Section': section,
+                                    'Students_Count': num_students,
+                                    'Room': suitable_room,
+                                    'Time_Slot': actual_slot,
+                                    'Base_Time_Slot': slot,
+                                    'Duration': duration,
+                                    'Student_Conflicts': conflicts,
+                                    'proctor_needed': proctor_needed,
+                                    'two_rooms_needed': two_rooms_needed
+                                }
 
-                        exam_record = {
-                            'Date': exam_date,
-                            'Subject': group['Subject'],
-                            'Instructor': instructor,
-                            'EduProgram': group['EduProgram'],
-                            'Section': section,
-                            'Students_Count': num_students,
-                            'Room': best_room,
-                            'Time_Slot': best_actual_slot,
-                            'Base_Time_Slot': best_base_slot,
-                            'Duration': duration,
-                            'Student_Conflicts': conflict_cost,
-                            'proctor_needed': proctor_needed
-                        }
+                                self.schedule.append(exam_record)
+                                if ',' in suitable_room:
+                                    room1, room2 = suitable_room.split(',')
+                                    self.room_usage[day][slot].add(room1)
+                                    self.room_usage[day][slot].add(room2)
+                                else:
+                                    self.room_usage[day][slot].add(suitable_room)
 
-                        self.schedule.append(exam_record)
-                        if ',' in best_room:
-                            room1, room2 = best_room.split(',')
-                            self.room_usage[best_day][best_base_slot].add(room1)
-                            self.room_usage[best_day][best_base_slot].add(room2)
-                        else:
-                            self.room_usage[best_day][best_base_slot].add(best_room)
+                                for student in students:
+                                    if student not in self.student_exams:
+                                        self.student_exams[student] = []
+                                    self.student_exams[student].append(exam_record)
+                                    student_exams_per_day[student][exam_date] += 1
 
-                        for student in students:
-                            if student not in self.student_exams:
-                                self.student_exams[student] = []
-                            self.student_exams[student].append(exam_record)
-                            student_exams_per_day[student][exam_date] += 1
+                                success_count += 1
+                                day_load[exam_date] += 1
+                                scheduled = True
+                                break
 
-                        success_count += 1
-                        day_load[exam_date] += 1
-                    else:
+                        if scheduled:
+                            break
+
+                    if not scheduled:
                         failed_sections.append(failed)
 
             # 7. Подсчёт конфликтов
@@ -1027,7 +1091,19 @@ class ExamScheduler:
             total_groups = len(exam_groups)
             logging.info(f"Успешно запланировано: {success_count} из {total_groups} групп")
             if failed_sections:
-                logging.warning(f"Не удалось запланировать {len(failed_sections)} секций: {failed_sections}")
+                logging.warning(
+                    f"Не удалось запланировать {len(failed_sections)} секций: {[f['section'] for f in failed_sections]}")
+
+            # Вывод статистики по предметам
+            if self.schedule_df is not None and not self.schedule_df.empty:
+                subject_stats = self.schedule_df.groupby(['Subject', 'Date']).size().reset_index(name='count')
+                logging.info("Распределение экзаменов по предметам и дням:")
+                for subject in subject_stats['Subject'].unique():
+                    subject_dates = subject_stats[subject_stats['Subject'] == subject]
+                    dates_info = []
+                    for _, row in subject_dates.iterrows():
+                        dates_info.append(f"{row['Date']}({row['count']} групп)")
+                    logging.info(f"  {subject}: {', '.join(dates_info)}")
 
             return self.schedule_df
 
@@ -1035,7 +1111,6 @@ class ExamScheduler:
             logging.error(f"Ошибка при создании расписания: {str(e)}")
             self.schedule_df = pd.DataFrame()
             return self.schedule_df
-
     def _is_slot_available(self, day, room, slot):
         if not hasattr(self, 'room_availability'):
             self.room_availability = {

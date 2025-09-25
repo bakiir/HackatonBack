@@ -217,7 +217,6 @@ def handle_initialization():
 @app.route("/api/send_emails_admins")
 @admin_required("admin")
 def send_email_to_admins():
-
     thread = threading.Thread(target=send_emails_to_admins)
     thread.start()
     return jsonify({
@@ -447,7 +446,6 @@ def handle_management():
             )
             session.add(new_session)
 
-            # Удаляем черновик и связанные статусы
             # Удаляем черновик и связанные статусы
             session.query(AdminStatusDraft).filter_by(session_id=active_draft.id).delete()
             session.delete(active_draft)
