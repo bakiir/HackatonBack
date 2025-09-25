@@ -98,6 +98,7 @@ def assign_proctors():
     if current_scheduler is None:
         return jsonify({'error': 'Планировщик не инициализирован'}), 400
 
+    session = Session()
     try:
         proctors_file = request.files['proctors']
 
@@ -107,12 +108,21 @@ def assign_proctors():
 
             current_scheduler.assign_proctors(proctors_path)
 
-        # ✅ Добавляем успешный ответ
+        # Update the session
+        active_session = session.query(ExamSession).filter_by(is_active=True).first()
+        if active_session:
+            active_session.schedule_data = current_scheduler.schedule_df.to_json(orient='records')
+            session.commit()
+            logging.info("Сессия успешно обновлена с данными о прокторах.")
+
         return jsonify({'message': 'Прокторы успешно назначены'}), 200
 
     except Exception as e:
+        session.rollback()
         logging.error(f"Ошибка назначения прокторов: {str(e)}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 @app.route('/api/proctors/save_excel', methods=['GET'])
 def save_proctor_list_excel():
