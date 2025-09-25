@@ -522,7 +522,7 @@ def check_all_drafts():
         session.close()
 
 @app.route('/api/admin_statuses', methods=['GET'])
-@admin_required("admin")
+@jwt_required()
 def admin_statuses():
     session = Session()
     try:
