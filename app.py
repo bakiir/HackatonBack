@@ -1342,7 +1342,7 @@ def get_student_schedule(student_id):
             return jsonify({"error": "Расписание не найдено"}), 404
 
         result = student_schedule.drop(
-            columns=['Proctor', 'Student_Conflicts', 'proctor_needed'],
+            columns=['Student_Conflicts', 'proctor_needed'],  # Убрали 'Proctor'
             errors='ignore'
         ).replace({np.nan: None}).to_dict('records')
 
@@ -1352,6 +1352,7 @@ def get_student_schedule(student_id):
                 date_part = exam['Date']
                 time_slot = exam['Time_Slot'].strip()
                 subject = exam['Subject'].strip()
+                proctor = exam.get('Proctor', None)  # Берем проктора из schedule_df
 
                 # Вариант 1: точное совпадение
                 exact_key = f"{date_part}|{time_slot}|{subject}|{student_id}"
@@ -1373,20 +1374,24 @@ def get_student_schedule(student_id):
                 if seat_info:
                     exam['seat_info'] = {
                         'seat_number': seat_info.get('seat'),
+                        'room': seat_info.get('room'),
+                        'proctor': proctor  # Добавляем проктора
                     }
                     logging.info(f"Found seat info: {exam['seat_info']}")
                 else:
                     exam['seat_info'] = {
                         'seat_number': None,
+                        'room': None,
+                        'proctor': proctor
                     }
                     logging.warning(f"No seat found for student {student_id} in {subject} on {date_part} {time_slot}")
 
             except Exception as e:
                 logging.error(f"Error processing seat info: {str(e)}")
                 exam['seat_info'] = {
-                    'room': 'Ошибка',
                     'seat_number': None,
-                    'instructor': 'Ошибка обработки'
+                    'room': 'Ошибка',
+                    'proctor': 'Ошибка обработки'
                 }
 
         return jsonify(result)
