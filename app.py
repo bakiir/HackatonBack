@@ -1331,6 +1331,59 @@ def update_room_requirement():
     finally:
         session.close()
 
+@app.route('/api/exams/batch-update', methods=['POST'])
+@jwt_required()
+def batch_update_exams():
+    global current_scheduler
+    claims = get_jwt()
+    user_role = claims.get('role')
+    session = Session()
+    try:
+        logging.info(f"User {user_role} initiated batch exam update with data: {request.json}")
+        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        if active_draft and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
+            logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
+        if not current_scheduler:
+            logging.error("Scheduler not initialized.")
+            return jsonify({
+                'status': 'error',
+                'message': 'Планировщик не инициализирован'
+            }), 400
+
+        data = request.json
+        if not data or 'exams' not in data:
+            logging.error("No exam data provided in batch update.")
+            return jsonify({
+                'status': 'error',
+                'message': 'Не предоставлены данные об экзаменах'
+            }), 400
+
+        current_scheduler.batch_update_exams(data['exams'])
+
+        # Update the draft with the latest exam_groups
+        if active_draft:
+            active_draft.exams_data = current_scheduler.exam_groups.to_json(orient='records')
+            session.commit()
+            logging.info("Exam draft session data updated successfully.")
+
+        logging.info("Batch exam update completed successfully.")
+        return jsonify({
+            'status': 'success',
+            'message': 'Экзамены успешно обновлены'
+        }), 200
+
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Ошибка при обновлении экзаменов: {traceback.format_exc()}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Ошибка при обновлении экзаменов: {str(e)}'
+        }), 500
+    finally:
+        session.close()
+
 @app.route('/api/upload-students', methods=['POST'])
 @admin_required("admin")
 def upload_students():

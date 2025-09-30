@@ -7,14 +7,11 @@ import traceback
 from collections import defaultdict
 from itertools import combinations
 
-from fuzzywuzzy import process
 
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
 from io import StringIO
-
-from services.check_student_conflicts import check_all_students_conflicts
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -326,6 +323,38 @@ class ExamScheduler:
             self.exam_groups.loc[self.exam_groups['Section'] == section_id, "Duration"] = duration
 
         logging.info(f"Обновлены длительности для {len(exam_data)} экзаменов")
+
+    def batch_update_exams(self, exams_data):
+        """
+        Batch updates exams with has_exam, proctor_needed, and two_rooms_needed status.
+
+        :param exams_data: A list of dictionaries, where each dictionary has
+                           'section_id', 'has_exam', 'has_proctor', and 'two_rooms_needed'.
+        """
+        logging.info(f"Starting batch update for {len(exams_data)} exams.")
+        for exam in exams_data:
+            section_id = exam.get('section_id')
+            has_exam = exam.get('has_exam')
+            has_proctor = exam.get('has_proctor')
+            two_rooms_needed = exam.get('two_rooms_needed')
+
+            if section_id not in self.exam_groups['Section'].values:
+                logging.warning(f"Section {section_id} not found, skipping.")
+                continue
+
+            if has_exam is not None:
+                self.exam_groups.loc[self.exam_groups['Section'] == section_id, 'has_exam'] = has_exam
+                logging.info(f"Updated has_exam for section {section_id} to {has_exam}")
+
+            if has_proctor is not None:
+                self.exam_groups.loc[self.exam_groups['Section'] == section_id, 'proctor_needed'] = has_proctor
+                logging.info(f"Updated proctor_needed for section {section_id} to {has_proctor}")
+
+            if two_rooms_needed is not None:
+                self.exam_groups.loc[self.exam_groups['Section'] == section_id, 'two_rooms_needed'] = two_rooms_needed
+                logging.info(f"Updated two_rooms_needed for section {section_id} to {two_rooms_needed}")
+        logging.info("Finished batch update.")
+
 
     def _generate_initial_dates(self):
         """Генерирует начальный список дат"""
