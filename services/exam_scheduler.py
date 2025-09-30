@@ -43,6 +43,7 @@ class ExamScheduler:
         self.work_day_start = datetime.strptime(work_day_start, "%H:%M")
         self.work_day_end = datetime.strptime(work_day_end, "%H:%M")
         self.seat_assignments = {}
+        self.failed_sections = []
 
         # Установка дат
         if start_date:
@@ -1029,6 +1030,7 @@ class ExamScheduler:
             if failed_sections:
                 logging.warning(f"Не удалось запланировать {len(failed_sections)} секций: {failed_sections}")
 
+            self.failed_sections = failed_sections
             return self.schedule_df
 
         except Exception as e:
@@ -1361,9 +1363,6 @@ class ExamScheduler:
                 logging.error(f"Ошибка при сохранении конфликтов по дням в Excel: {str(e)}")
         else:
             logging.info("Конфликтных студентов по дням (>1 экзамена в день) нет.")
-
-        # Вызов проверки конфликтов
-        check_all_students_conflicts(self)
 
         return self.student_exams, conflict_students_list
     def _log_schedule_stats(self):

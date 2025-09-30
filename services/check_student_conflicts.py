@@ -116,3 +116,51 @@ def check_all_students_conflicts(scheduler):
             logging.error(f"Ошибка при сохранении конфликтов по дням в Excel: {str(e)}")
     else:
         logging.info("Конфликтных студентов по дням (>1 экзамена в день) нет.")
+
+
+def get_student_conflicts(scheduler):
+    """
+    Проверяет всех студентов на конфликты (>1 экзамена в день)
+    и возвращает список конфликтов.
+
+    :param scheduler: Экземпляр класса ExamScheduler.
+    :return: Список словарей с деталями конфликтов.
+    """
+    if not scheduler:
+        logging.error("Scheduler не инициализирован!")
+        return []
+
+    if hasattr(scheduler, 'exams_df') and not scheduler.exams_df.empty:
+        all_students = scheduler.exams_df['fake_id'].unique()
+    elif hasattr(scheduler, 'student_exams'):
+        all_students = list(scheduler.student_exams.keys())
+    else:
+        logging.error("Нет данных о студентах! Проверьте exams_df или student_exams.")
+        return []
+
+    conflict_details = []
+
+    for student_id in all_students:
+        try:
+            student_schedule = scheduler.get_student_sections(student_id)
+
+            if student_schedule.empty:
+                continue
+
+            exams_by_date = defaultdict(list)
+            for _, exam in student_schedule.iterrows():
+                date = exam['Date']
+                subject = exam['Subject'].strip()
+                exams_by_date[date].append(subject)
+
+            for date, subjects in exams_by_date.items():
+                if len(subjects) > 1:
+                    conflict_details.append({
+                        'student': student_id,
+                        'date': date,
+                        'subjects': subjects
+                    })
+        except Exception as e:
+            logging.error(f"Ошибка при проверке студента {student_id}: {str(e)}")
+
+    return conflict_details

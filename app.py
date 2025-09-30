@@ -15,6 +15,7 @@ from flask import Flask, jsonify, send_file
 import logging
 from flask_cors import CORS
 from services.exam_scheduler import ExamScheduler
+from services.check_student_conflicts import get_student_conflicts
 import numpy as np
 import pandas as pd
 import os
@@ -745,6 +746,40 @@ def export_schedule():
     return send_file(output_file, as_attachment=True)
 
 
+@app.route('/api/report/conflicts', methods=['GET'])
+def get_conflict_report():
+    global current_scheduler
+    if not current_scheduler:
+        return jsonify({'error': 'Планировщик не инициализирован'}), 400
+
+    # Scheduled stats
+    total = len(current_scheduler.exam_groups[current_scheduler.exam_groups['has_exam'] == True])
+    scheduled_count = len(current_scheduler.schedule_df)
+    scheduled_str = f"{scheduled_count}/{total}"
+
+    # Non-scheduled subjects
+    non_scheduled_subjects = []
+    if hasattr(current_scheduler, 'failed_sections'):
+        for failed in current_scheduler.failed_sections:
+            # Extract relevant info from the 'group' series
+            group_info = failed.get('group', pd.Series())
+            non_scheduled_subjects.append({
+                'section': failed.get('section'),
+                'subject': group_info.get('Subject'),
+                'instructor': group_info.get('Instructor'),
+                'num_students': failed.get('num_students'),
+            })
+
+    # Conflicts
+    conflicts = get_student_conflicts(current_scheduler)
+
+    report = {
+        "scheduled": scheduled_str,
+        "non_scheduled_subjects": non_scheduled_subjects,
+        "conflicts": conflicts
+    }
+
+    return jsonify(report)
 
 
 def convert_numpy_types(obj):
