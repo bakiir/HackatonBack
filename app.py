@@ -7,7 +7,6 @@ from venv import logger
 import bcrypt
 import requests
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, get_jwt
-from kombu.abstract import Object
 
 from services.jwt_service import  admin_required
 from users_db import User, get_or_create_admin_status, set_admin_status_ready, get_all_admin_statuses, are_all_admins_ready
@@ -532,20 +531,36 @@ def check_all_drafts():
     finally:
         session.close()
 
+
 @app.route('/api/admin_statuses', methods=['GET'])
 @jwt_required()
 def admin_statuses():
     session = Session()
     try:
+        # Проверяем наличие активной сессии
         active_session = session.query(ExamSessionDraft).filter_by(is_active=True).first()
-        if not active_session:
-            return jsonify({"error": "Активная сессия не найдена"}), 404
 
-        statuses = get_all_admin_statuses(session, active_session.id)
-        return jsonify([s.to_dict() for s in statuses]), 200
+        # Проверяем наличие любых черновиков
+        draft_count = session.query(ExamSessionDraft).count()
+        has_drafts = draft_count > 0
+
+        # Если активная сессия есть, получаем статусы
+        if active_session:
+            statuses = get_all_admin_statuses(session, active_session.id)
+            return jsonify({
+                "statuses": [s.to_dict() for s in statuses],
+                "has_drafts": has_drafts
+            }), 200
+        else:
+            # Если активной сессии нет, возвращаем только has_drafts
+            return jsonify({
+                "error": "Активная сессия не найдена",
+                "has_drafts": has_drafts
+            }), 404
+
     except Exception as e:
         logging.error(f"Ошибка при получении статусов: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "has_drafts": False}), 500
     finally:
         session.close()
 
