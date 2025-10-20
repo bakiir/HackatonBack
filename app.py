@@ -797,6 +797,51 @@ def get_conflict_report():
     return jsonify(report)
 
 
+@app.route('/api/resolve-day-conflicts', methods=['POST'])
+@admin_required("admin")
+def resolve_conflicts_api():
+    db_session = Session()
+    try:
+        active_session = db_session.query(ExamSession).filter_by(is_active=True).first()
+        if not active_session:
+            return jsonify({"error": "Активная сессия не найдена"}), 404
+
+        # Инициализируем планировщик с данными из активной сессии
+        scheduler = ExamScheduler(session_data=active_session)
+        
+        # Импортируем и вызываем новую функцию
+        from services.conflict_resolver import resolve_day_conflicts
+        changes = resolve_day_conflicts(scheduler)
+
+        if changes:
+            # Если были внесены изменения, обновляем данные сессии в БД
+            active_session.exams_data = scheduler.exams_df.to_json(orient='records')
+            active_session.schedule_data = scheduler.schedule_df.to_json(orient='records')
+            
+            # Перераспределяем места после изменения секций
+            scheduler.assign_seats()
+            active_session.seat_assignments = scheduler.seat_assignments
+
+            db_session.commit()
+            logging.info(f"Успешно разрешено {len(changes)} конфликтов. Изменения сохранены в сессии {active_session.id}.")
+
+            # Обновляем глобальный планировщик, чтобы изменения были видны сразу
+            global current_scheduler
+            current_scheduler = scheduler
+
+        return jsonify({
+            "message": f"Обработка конфликтов завершена. Перемещено студентов: {len(changes)}.",
+            "changes": changes
+        }), 200
+
+    except Exception as e:
+        db_session.rollback()
+        logging.error(f"Ошибка при разрешении конфликтов: {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+
+
 def convert_numpy_types(obj):
     if isinstance(obj, (np.int64, np.int32)):
         return int(obj)
