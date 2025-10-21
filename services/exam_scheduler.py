@@ -1021,10 +1021,10 @@ class ExamScheduler:
                 for day in self.custom_dates:
                     exam_date = day.strftime('%Y-%m-%d')
                     day_conflicts = sum(1 for student in students if student_exams_per_day[student][exam_date] >= 1)
-                    if day_conflicts > 0:
-                        continue
-
+                    
                     load_cost = day_load[exam_date]
+                    
+                    cost = day_conflicts * 100 + load_cost
 
                     for slot in self.time_slots:
                         start, end = slot.split('-')
@@ -1076,7 +1076,7 @@ class ExamScheduler:
                             for room1, room2 in room_pairs:
                                 if self.room_capacities.get(room1, 0) + self.room_capacities.get(room2, 0) >= num_students:
                                     room = f"{room1},{room2}"
-                                    best_slots.append((day, slot, actual_slot, room, load_cost))
+                                    best_slots.append((day, slot, actual_slot, room, cost))
                                     break
                         else:
                             # Нужна одна аудитория
@@ -1086,7 +1086,7 @@ class ExamScheduler:
                             ]
                             if available_rooms:
                                 room = available_rooms[0]
-                                best_slots.append((day, slot, actual_slot, room, load_cost))
+                                best_slots.append((day, slot, actual_slot, room, cost))
 
                 if best_slots:
                     best_day, best_base_slot, best_actual_slot, best_room, _ = min(
@@ -1157,6 +1157,8 @@ class ExamScheduler:
                         exam_date = day.strftime('%Y-%m-%d')
                         day_conflicts = sum(1 for student in students if student_exams_per_day[student][exam_date] >= 1)
                         load_cost = day_load[exam_date]
+                        
+                        cost = day_conflicts * 100 + load_cost
 
                         for slot in self.time_slots:
                             start, end = slot.split('-')
@@ -1206,7 +1208,7 @@ class ExamScheduler:
                                 for room1, room2 in room_pairs:
                                     if self.room_capacities.get(room1, 0) + self.room_capacities.get(room2, 0) >= num_students:
                                         room = f"{room1},{room2}"
-                                        best_slots.append((day, slot, actual_slot, room, day_conflicts, load_cost))
+                                        best_slots.append((day, slot, actual_slot, room, cost))
                                         break
                             else:
                                 available_rooms = [
@@ -1215,11 +1217,11 @@ class ExamScheduler:
                                 ]
                                 if available_rooms:
                                     room = available_rooms[0]
-                                    best_slots.append((day, slot, actual_slot, room, day_conflicts, load_cost))
+                                    best_slots.append((day, slot, actual_slot, room, cost))
 
                     if best_slots:
-                        best_day, best_base_slot, best_actual_slot, best_room, conflict_cost, _ = min(
-                            best_slots, key=lambda x: (x[4], x[5])
+                        best_day, best_base_slot, best_actual_slot, best_room, _ = min(
+                            best_slots, key=lambda x: x[4]
                         )
                         exam_date = best_day.strftime('%Y-%m-%d')
 
@@ -1234,7 +1236,7 @@ class ExamScheduler:
                             'Time_Slot': best_actual_slot,
                             'Base_Time_Slot': best_base_slot,
                             'Duration': duration,
-                            'Student_Conflicts': conflict_cost,
+                            'Student_Conflicts': day_conflicts,
                             'proctor_needed': proctor_needed
                         }
 
@@ -1314,21 +1316,33 @@ class ExamScheduler:
 
         # Функция для подсчёта стоимости (число студентов с конфликтами в одном слоте)
         def calculate_cost(student_exams, changed_students=None):
-            conflict_count = 0
-            if changed_students is not None:
-                students_to_check = changed_students
-            else:
-                students_to_check = student_exams.keys()
+            hard_conflict_penalty = 1000
+            soft_conflict_penalty = 100
+            cost = 0
+            
+            students_to_check = changed_students if changed_students is not None else student_exams.keys()
+
             for student in students_to_check:
                 exams = student_exams[student]
-                exams_by_date_slot = defaultdict(list)
+                exams_by_date = defaultdict(list)
                 for exam in exams:
-                    exams_by_date_slot[(exam['Date'], exam['Time_Slot'])].append(exam)
-                for (date, time_slot), daily_exams in exams_by_date_slot.items():
-                    if len(daily_exams) > 1:  # Конфликт, если >1 экзамена в одном слоте
-                        conflict_count += 1
-                        break
-            return conflict_count * 1000
+                    exams_by_date[exam['Date']].append(exam)
+
+                for date, daily_exams in exams_by_date.items():
+                    # Hard conflict: more than one exam in the same time slot
+                    exams_by_slot = defaultdict(list)
+                    for exam in daily_exams:
+                        exams_by_slot[exam['Time_Slot']].append(exam)
+                    
+                    for slot_exams in exams_by_slot.values():
+                        if len(slot_exams) > 1:
+                            cost += hard_conflict_penalty * (len(slot_exams) - 1)
+
+                    # Soft conflict: more than one exam on the same day
+                    if len(daily_exams) > 1:
+                        cost += soft_conflict_penalty * (len(daily_exams) - 1)
+            
+            return cost
 
         # Основной алгоритм simulated annealing
         random.seed(42)
@@ -1364,9 +1378,9 @@ class ExamScheduler:
         }
         best_cost = current_cost
 
-        temperature = 10000.0
+        temperature = 20000.0
         cooling_rate = 0.980
-        max_iterations = 2500
+        max_iterations = 5000
 
         for iteration in range(max_iterations):
             conflict_students = set()
