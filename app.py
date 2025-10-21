@@ -21,6 +21,7 @@ import os
 from flask import request
 from create_db import ExamSession, engine, ExamSessionDraft, AdminStatusDraft
 from sqlalchemy.orm import sessionmaker
+import json # Added this import
 
 allowed_roles = {"admin-sdt", "admin-gum", "admin-spigu", "admin-sem", "admin"}
 role_to_faculty = {
@@ -90,6 +91,96 @@ CORS(app)
 # Глобальная переменная для хранения планировщика
 current_scheduler = None
 
+
+from create_db import ExamSession, engine, ExamSessionDraft, AdminStatusDraft, ClassroomSlot, update_classroom_slots
+
+
+@app.route('/api/classroom/107/free-slots', methods=['GET'])
+def get_free_classroom_107_slots():
+    session = Session()
+    try:
+        free_slots = session.query(ClassroomSlot).filter_by(classroom_number='107', is_booked=False).all()
+        return jsonify([slot.to_dict() for slot in free_slots]), 200
+    except Exception as e:
+        logging.error(f"Error getting free slots for classroom 107: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
+@app.route('/api/slots/book', methods=['POST'])
+# @admin_required("admin")  # Temporarily commented out
+def book_classroom_slot():
+    session = Session()
+    try:
+        data = request.json
+        # Convert single object to list for consistent processing
+        if not isinstance(data, list):
+            data = [data]
+
+        results = []
+        for booking in data:
+            slot_id = booking.get('slot_id')
+            subject = booking.get('subject')
+            sections = booking.get('sections')
+
+            # Validate input fields
+            if not slot_id or not subject or not sections or not isinstance(sections, list):
+                results.append({
+                    'slot_id': slot_id,
+                    'status': 'error',
+                    'message': 'Request body must contain "slot_id", "subject", and a list of "sections"'
+                })
+                continue
+
+            # Check if slot exists
+            slot = session.query(ClassroomSlot).get(slot_id)
+            if not slot:
+                results.append({
+                    'slot_id': slot_id,
+                    'status': 'error',
+                    'message': 'Slot not found'
+                })
+                continue
+
+            # Check if slot is already booked
+            if slot.is_booked:
+                results.append({
+                    'slot_id': slot_id,
+                    'status': 'error',
+                    'message': 'Slot is already booked'
+                })
+                continue
+
+            # Additional validation (optional, commented as per original code)
+            # - Check if sections exist in exam_groups
+            # - Check if total students in sections <= 200
+            # - Check for scheduling conflicts
+
+            booking_info = {
+                "subject": subject,
+                "sections": sections
+            }
+
+            # Update slot
+            slot.is_booked = True
+            slot.booked_groups_info = json.dumps(booking_info, ensure_ascii=False)
+            session.commit()
+
+            logging.info(f"Slot {slot_id} in classroom 107 manually booked for subject '{subject}' with sections {sections}.")
+            results.append({
+                'slot_id': slot_id,
+                'status': 'success',
+                'message': f'Slot {slot_id} successfully booked.'
+            })
+
+        return jsonify({'results': results}), 200
+
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Error booking slots: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 @app.route('/api/proctors/assign', methods=['POST'])
 @admin_required("admin")
 def assign_proctors():
@@ -194,7 +285,10 @@ def handle_initialization():
                 start_date=start_date,
                 num_days=num_days
             )
-            # 4. Создание черновика сессии
+            # 4. Update classroom slots
+            update_classroom_slots(start_date, num_days, current_scheduler.rooms_df)
+
+            # 5. Создание черновика сессии
             session.query(ExamSessionDraft).update({'is_active': False})  # Деактивируем предыдущие черновики
             new_draft = ExamSessionDraft(
                 title=title,

@@ -1,8 +1,9 @@
 from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Boolean, Text, ForeignKey
-from sqlalchemy.dialects.sqlite import JSON  # Изменение 1: Правильный импорт JSON
+from sqlalchemy.dialects.sqlite import JSON # Изменение 1: Правильный импорт JSON
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import json
+import pandas as pd
 
 Base = declarative_base()
 
@@ -13,9 +14,9 @@ class ExamSession(Base):
     id = Column(Integer, primary_key=True)
     title = Column(String(150), nullable=False)
     start_date = Column(Date, nullable=False)
-    original_start_date = Column(Date)  # Изменение 2: Добавлено для хранения оригинальной даты
+    original_start_date = Column(Date) # Изменение 2: Добавлено для хранения оригинальной даты
     days = Column(Integer)
-    original_num_days = Column(Integer)  # Изменение 3: Добавлено для хранения оригинального количества дней
+    original_num_days = Column(Integer) # Изменение 3: Добавлено для хранения оригинального количества дней
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Изменение 4: Используем Column(JSON) вместо json.dumps()
@@ -85,7 +86,7 @@ class ExamSessionDraft(Base):
     start_date = Column(Date, nullable=False)
     days = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-    faculties_data = Column(Text)  # Данные о факультетах
+    faculties_data = Column(Text) # Данные о факультетах
     exams_data = Column(Text)     # Данные об экзаменах
     rooms_data = Column(Text)     # Данные о помещениях
     is_active = Column(Boolean, default=False)
@@ -121,8 +122,66 @@ class ExamSessionDraft(Base):
             "is_active": self.is_active
         }
 
-engine = create_engine("sqlite:///exam_sessions.db", echo=True)
+class ClassroomSlot(Base):
+    __tablename__ = "classroom_slots"
+
+    id = Column(Integer, primary_key=True)
+    classroom_number = Column(String(50), nullable=False)
+    start_time = Column(DateTime, nullable=False)
+    end_time = Column(DateTime, nullable=False)
+    is_booked = Column(Boolean, default=False)
+    booked_groups_info = Column(Text, nullable=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "classroom_number": self.classroom_number,
+            "start_time": self.start_time.isoformat(),
+            "end_time": self.end_time.isoformat(),
+            "is_booked": self.is_booked,
+            "booked_groups_info": self.booked_groups_info
+        }
+
+engine = create_engine("sqlite:///exam_sessions.db", echo=False)
 Base.metadata.create_all(engine)
 
 # Создаем фабрику сессий
 Session = sessionmaker(bind=engine)
+
+def update_classroom_slots(start_date, num_days, rooms_df):
+    from datetime import datetime, timedelta
+
+    session = Session()
+    
+    # Очищаем старые слоты
+    session.query(ClassroomSlot).delete()
+
+    # Создаем новые слоты
+    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+    for day in range(num_days):
+        current_date = start_date + timedelta(days=day)
+        slot_times = [
+            (datetime.combine(current_date, datetime.min.time()).replace(hour=8, minute=0), datetime.combine(current_date, datetime.min.time()).replace(hour=11, minute=0)),
+            (datetime.combine(current_date, datetime.min.time()).replace(hour=11, minute=30), datetime.combine(current_date, datetime.min.time()).replace(hour=14, minute=30)),
+            (datetime.combine(current_date, datetime.min.time()).replace(hour=15, minute=0), datetime.combine(current_date, datetime.min.time()).replace(hour=18, minute=0))
+        ]
+        
+        for room in rooms_df['Аудитория']:
+            for start, end in slot_times:
+                slot = ClassroomSlot(
+                    classroom_number=str(room),
+                    start_time=start,
+                    end_time=end
+                )
+                session.add(slot)
+            
+    session.commit()
+    session.close()
+    print(f"Classroom slots have been updated for {num_days} days, starting from {start_date}.")
+
+
+if __name__ == '__main__':
+    # Example usage for update_classroom_slots
+    rooms_data = {'Аудитория': ['101', '102', '107', '202', '203']}
+    rooms_df = pd.DataFrame(rooms_data)
+    update_classroom_slots('2025-10-22', 14, rooms_df)
