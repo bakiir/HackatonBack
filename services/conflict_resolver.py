@@ -48,12 +48,14 @@ def resolve_day_conflicts(scheduler):
                 for exam_to_move in exams:
                     original_section = exam_to_move['Section']
                     subject_to_move = exam_to_move['Subject']
+                    instructor_to_match = exam_to_move['Instructor']
                     
-                    logging.info(f"Attempting to move '{subject_to_move}' (section: {original_section})")
+                    logging.info(f"Attempting to move '{subject_to_move}' (section: {original_section}) for instructor '{instructor_to_match}'")
 
-                    # Find other sections for the same subject
+                    # Find other sections for the same subject and instructor
                     alternative_sections = all_exam_groups[
                         (all_exam_groups['Subject'] == subject_to_move) &
+                        (all_exam_groups['Instructor'] == instructor_to_match) &
                         (all_exam_groups['Section'] != original_section)
                     ]
 
