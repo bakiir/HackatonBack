@@ -554,7 +554,6 @@ def admin_statuses():
         else:
             # Если активной сессии нет, возвращаем только has_drafts
             return jsonify({
-                "error": "Активная сессия не найдена",
                 "has_drafts": has_drafts
             })
 
