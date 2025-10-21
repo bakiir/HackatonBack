@@ -555,7 +555,7 @@ def admin_statuses():
             # Если активной сессии нет, возвращаем только has_drafts
             return jsonify({
                 "has_drafts": has_drafts
-            })
+            }), 200
 
     except Exception as e:
         logging.error(f"Ошибка при получении статусов: {str(e)}")
