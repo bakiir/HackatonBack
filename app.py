@@ -556,7 +556,7 @@ def admin_statuses():
             return jsonify({
                 "error": "Активная сессия не найдена",
                 "has_drafts": has_drafts
-            }), 404
+            })
 
     except Exception as e:
         logging.error(f"Ошибка при получении статусов: {str(e)}")
