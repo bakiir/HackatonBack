@@ -85,6 +85,7 @@ def resolve_day_conflicts(scheduler, session_id):
                         # 2. Check for available space
                         room_name = alt_schedule_info['Room']
                         # Clean room name if it has capacity in it e.g. "101(25)"
+                        room_name = str(room_name)
                         if '(' in room_name:
                             room_name = room_name.split('(')[0].strip()
 
