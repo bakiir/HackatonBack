@@ -151,7 +151,8 @@ def get_student_conflicts(scheduler):
             for _, exam in student_schedule.iterrows():
                 date = exam['Date']
                 subject = exam['Subject'].strip()
-                exams_by_date[date].append(subject)
+                time_slot = exam['Time_Slot'].strip()
+                exams_by_date[date].append(f"{subject} ({time_slot})")
 
             for date, subjects in exams_by_date.items():
                 if len(subjects) > 1:
