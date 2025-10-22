@@ -142,6 +142,28 @@ class ClassroomSlot(Base):
             "booked_groups_info": self.booked_groups_info
         }
 
+class ResolvedConflict(Base):
+    __tablename__ = "resolved_conflicts"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("exam_session.id"), nullable=False)
+    student_id = Column(String(150), nullable=False)
+    subject = Column(String(150), nullable=False)
+    original_section = Column(String(150), nullable=False)
+    new_section = Column(String(150), nullable=False)
+    resolved_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "student_id": self.student_id,
+            "subject": self.subject,
+            "original_section": self.original_section,
+            "new_section": self.new_section,
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+        }
+
 engine = create_engine("sqlite:///exam_sessions.db", echo=False)
 Base.metadata.create_all(engine)
 

@@ -9,7 +9,7 @@ import requests
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, get_jwt
 
 from services.jwt_service import  admin_required
-from users_db import User, get_or_create_admin_status, set_admin_status_ready, get_all_admin_statuses, are_all_admins_ready
+from users_db import User, get_or_create_admin_status, set_admin_status_ready, get_all_admin_statuses, are_all_admins_ready, get_resolved_conflicts_by_session_id
 from flask import Flask, jsonify, send_file
 import logging
 from flask_cors import CORS
@@ -904,7 +904,7 @@ def resolve_conflicts_api():
         
         # Импортируем и вызываем новую функцию
         from services.conflict_resolver import resolve_day_conflicts
-        changes = resolve_day_conflicts(scheduler)
+        changes = resolve_day_conflicts(scheduler, active_session.id)
 
         if changes:
             # Если были внесены изменения, обновляем данные сессии в БД
@@ -930,6 +930,24 @@ def resolve_conflicts_api():
     except Exception as e:
         db_session.rollback()
         logging.error(f"Ошибка при разрешении конфликтов: {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+
+
+@app.route('/api/resolved_conflicts', methods=['GET'])
+@admin_required("admin")
+def get_resolved_conflicts():
+    db_session = Session()
+    try:
+        active_session = db_session.query(ExamSession).filter_by(is_active=True).first()
+        if not active_session:
+            return jsonify({"error": "Активная сессия не найдена"}), 404
+
+        resolved_conflicts = get_resolved_conflicts_by_session_id(db_session, active_session.id)
+        return jsonify([conflict.to_dict() for conflict in resolved_conflicts]), 200
+    except Exception as e:
+        logging.error(f"Error retrieving resolved conflicts: {traceback.format_exc()}")
         return jsonify({"error": str(e)}), 500
     finally:
         db_session.close()

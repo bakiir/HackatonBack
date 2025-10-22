@@ -1,18 +1,22 @@
 import pandas as pd
 import logging
 from collections import defaultdict
+from create_db import Session, ResolvedConflict # Import Session and ResolvedConflict
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def resolve_day_conflicts(scheduler):
+def resolve_day_conflicts(scheduler, session_id):
     """
     Tries to resolve student exam conflicts where a student has more than one exam on the same day.
     It attempts to move one of the conflicting exams to a different group of the same subject on a different day.
 
     :param scheduler: An instance of the ExamScheduler class.
+    :param session_id: The ID of the current exam session.
     :return: A list of dictionaries detailing the successful changes.
     """
     changes_made = []
+    session = Session() # Create a new session
     
     try:
         conflicts_df = pd.read_excel("student_day_conflicts_after_optimization.xlsx")
@@ -113,6 +117,15 @@ def resolve_day_conflicts(scheduler):
                                 }
                             })
                             
+                            resolved_conflict = ResolvedConflict(
+                                session_id=session_id,
+                                student_id=student_id,
+                                subject=subject_to_move,
+                                original_section=original_section,
+                                new_section=alt_section_id
+                            )
+                            session.add(resolved_conflict)
+                            
                             move_successful = True
                             break # Move to the next student
                     
@@ -123,5 +136,7 @@ def resolve_day_conflicts(scheduler):
                     break # Move to the next student
 
     logging.info(f"Conflict resolution finished. Total changes made: {len(changes_made)}")
+    session.commit()
+    session.close()
     return changes_made
 

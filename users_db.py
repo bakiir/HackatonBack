@@ -5,7 +5,8 @@ import bcrypt
 import jwt
 from datetime import datetime, timedelta
 
-from create_db import AdminStatusDraft
+from create_db import AdminStatusDraft, ResolvedConflict
+
 
 # Конфигурация JWT
 SECRET_KEY = "your-secret-key"  # Замените на реальный секретный ключ
@@ -179,6 +180,12 @@ def are_all_admins_ready(session, session_id: int, model=AdminStatusDraft):
     """
     statuses = get_all_admin_statuses(session, session_id, model)
     return all(status.status == "ready" for status in statuses)
+
+def get_resolved_conflicts_by_session_id(session, session_id: int):
+    """
+    Retrieves all resolved conflicts for a given session ID.
+    """
+    return session.query(ResolvedConflict).filter_by(session_id=session_id).all()
 
 
 # Создание таблиц в базе данных
