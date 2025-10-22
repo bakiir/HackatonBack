@@ -830,6 +830,7 @@ def get_schedule():
     return jsonify(schedule_data)
 
 
+
 @app.route('/schedule/stats')
 def get_schedule_stats():
     if not current_scheduler:
@@ -845,6 +846,48 @@ def get_schedule_stats():
     })
 
 
+@app.route('/api/schedule/status', methods=['GET'])
+def get_scheduling_status():
+    """
+    Возвращает статистику по последнему запуску генерации расписания,
+    включая количество запланированных, общее количество и список незапланированных экзаменов.
+    """
+    if not current_scheduler:
+        return jsonify({'error': 'Планировщик не инициализирован или расписание не создано'}), 400
+
+    # Общее количество экзаменов, которые должны были быть запланированы
+    try:
+        total_to_schedule = len(current_scheduler.exam_groups[current_scheduler.exam_groups['has_exam'] == True])
+    except (AttributeError, KeyError):
+        total_to_schedule = 0
+
+    # Количество успешно запланированных экзаменов
+    try:
+        successfully_scheduled = len(current_scheduler.schedule_df)
+    except (AttributeError, TypeError):
+        successfully_scheduled = 0
+
+    # Список незапланированных секций
+    failed_sections_list = []
+    if hasattr(current_scheduler, 'failed_sections') and current_scheduler.failed_sections:
+        for failed in current_scheduler.failed_sections:
+            group_info = failed.get('group', pd.Series())
+            failed_sections_list.append({
+                'section': failed.get('section'),
+                'subject': group_info.get('Subject', 'N/A'),
+                'instructor': group_info.get('Instructor', 'N/A'),
+                'num_students': failed.get('num_students'),
+                'duration': failed.get('duration')
+            })
+    
+    failed_count = len(failed_sections_list)
+
+    return jsonify({
+        'total_exams_to_schedule': total_to_schedule,
+        'successfully_scheduled': successfully_scheduled,
+        'failed_to_schedule_count': failed_count,
+        'failed_sections': failed_sections_list
+    })
 
 
 @app.route('/schedule/export')
