@@ -1042,7 +1042,8 @@ class ExamScheduler:
                         'Base_Time_Slot': best_base_slot,
                         'Duration': duration,
                         'Student_Conflicts': 0,
-                        'proctor_needed': proctor_needed
+                        'proctor_needed': proctor_needed,
+                        'pinned': False
                     }
 
                     self.schedule.append(exam_record)
@@ -1172,9 +1173,10 @@ class ExamScheduler:
                             'Time_Slot': best_actual_slot,
                             'Base_Time_Slot': best_base_slot,
                             'Duration': duration,
-                            'Student_Conflicts': day_conflicts,
-                            'proctor_needed': proctor_needed
-                        }
+                        'Student_Conflicts': day_conflicts,
+                        'proctor_needed': proctor_needed,
+                        'pinned': False
+                    }
 
                         self.schedule.append(exam_record)
                         if ',' in best_room:
@@ -1444,7 +1446,8 @@ class ExamScheduler:
                     'Base_Time_Slot': base_slot,
                     'Duration': duration,
                     'Student_Conflicts': 0,
-                    'proctor_needed': proctor_needed
+                    'proctor_needed': proctor_needed,
+                    'pinned': exam.get('pinned', False)
                 }
 
                 for student in section_students:
