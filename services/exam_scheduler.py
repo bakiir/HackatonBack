@@ -1043,6 +1043,7 @@ class ExamScheduler:
                         'Duration': duration,
                         'Student_Conflicts': 0,
                         'proctor_needed': proctor_needed,
+                        'two_rooms_needed': two_rooms_needed,
                         'pinned': False
                     }
 
@@ -1175,6 +1176,7 @@ class ExamScheduler:
                             'Duration': duration,
                         'Student_Conflicts': day_conflicts,
                         'proctor_needed': proctor_needed,
+                        'two_rooms_needed': two_rooms_needed,
                         'pinned': False
                     }
 

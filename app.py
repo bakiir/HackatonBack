@@ -476,7 +476,7 @@ def handle_management():
             # Update the draft with the latest exam_groups
 
             if active_draft:
-                active_draft.exams_data = current_scheduler.exams_df.to_json(orient='records')
+                active_draft.exams_data = current_scheduler.exam_groups.to_json(orient='records')
                 session.commit()
 
             return jsonify({
@@ -507,7 +507,7 @@ def handle_management():
             # Update the draft with the latest exam_groups
 
             if active_draft:
-                active_draft.exams_data = current_scheduler.exams_df.to_json(orient='records')
+                active_draft.exams_data = current_scheduler.exam_groups.to_json(orient='records')
                 session.commit()
 
             return jsonify({
@@ -951,7 +951,7 @@ def resolve_conflicts_api():
 
         if changes:
             # Если были внесены изменения, обновляем данные сессии в БД
-            active_session.exams_data = scheduler.exams_df.to_json(orient='records')
+            active_session.exams_data = scheduler.exam_groups.to_json(orient='records')
             active_session.schedule_data = scheduler.schedule_df.to_json(orient='records')
             
             # Перераспределяем места после изменения секций
@@ -1527,7 +1527,7 @@ def update_room_requirement():
             current_scheduler.update_room_requirement(section_id, two_rooms_needed)
 
         # Update the draft with the latest exam_groups
-        active_draft.exams_data = current_scheduler.exams_df.to_json(orient='records')
+        active_draft.exams_data = current_scheduler.exam_groups.to_json(orient='records')
         session.commit()
 
         return jsonify({
