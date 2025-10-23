@@ -7,7 +7,6 @@ from venv import logger
 import bcrypt
 import requests
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, get_jwt
-
 from services.jwt_service import  admin_required
 from users_db import User, get_or_create_admin_status, set_admin_status_ready, get_all_admin_statuses, are_all_admins_ready, get_resolved_conflicts_by_session_id
 from flask import Flask, jsonify, send_file

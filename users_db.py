@@ -14,7 +14,10 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Подключение к базе данных
-engine = create_engine("sqlite:///exam_sessions.db", echo=True)
+engine = create_engine(
+    "postgresql+psycopg2://postgres:mysecretpassword@localhost:5433/postgres",
+    connect_args={'client_encoding': 'utf8'}
+)
 Base = declarative_base()
 
 

@@ -1,5 +1,5 @@
 from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Boolean, Text, ForeignKey
-from sqlalchemy.dialects.sqlite import JSON # Изменение 1: Правильный импорт JSON
+from sqlalchemy.dialects.postgresql import JSON # Изменение 1: Правильный импорт JSON
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import json
@@ -164,7 +164,10 @@ class ResolvedConflict(Base):
             "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
         }
 
-engine = create_engine("sqlite:///exam_sessions.db", echo=False)
+engine = create_engine(
+    "postgresql+psycopg2://postgres:mysecretpassword@localhost:5433/postgres",
+    connect_args={'client_encoding': 'utf8'}
+)
 Base.metadata.create_all(engine)
 
 # Создаем фабрику сессий
