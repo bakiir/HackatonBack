@@ -244,6 +244,17 @@ class ExamScheduler:
     def _prepare_data(self):
         logging.info("Подготовка данных для планирования.")
 
+        # Адаптация под новые названия столбцов
+        column_mapping = {
+            'Student ID': 'fake_id',
+            'Full Name': 'fake_name',
+            'Факультет студента': 'Faculty'
+        }
+        self.exams_df.rename(columns=column_mapping, inplace=True)
+        
+        if 'Дисциплина' in self.exams_df.columns and 'Subject' not in self.exams_df.columns:
+            self.exams_df.rename(columns={'Дисциплина': 'Subject'}, inplace=True)
+
         # Создаем exam_groups с колонкой Duration
         self.exam_groups = self.exams_df.drop_duplicates(subset=['Section'], keep='first').groupby(
             ['Subject', 'Instructor', 'EduProgram', 'YearsOfStudy', 'Section']
@@ -1227,7 +1238,9 @@ class ExamScheduler:
             total_groups_to_schedule = len(self.exam_groups[self.exam_groups['has_exam'] == True])
             logging.info(f"Успешно запланировано: {success_count} из {total_groups_to_schedule + len(failed_sections)} групп")
             if failed_sections:
-                logging.warning(f"Не удалось запланировать {len(failed_sections)} секций: {[f['section'] for f in failed_sections]}")
+                logging.warning(f"Не удалось запланировать {len(failed_sections)} секций. Детали:")
+                for f in failed_sections:
+                    logging.warning(f"  - Секция: {f.get('section')}, Студентов: {f.get('num_students')}")
 
             self.failed_sections = failed_sections
             return self.schedule_df
