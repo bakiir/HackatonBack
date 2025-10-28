@@ -1,10 +1,10 @@
 import pandas as pd
 import logging
 from collections import defaultdict
-from create_db import Session, ResolvedConflict # Import Session and ResolvedConflict
-
+from create_db import Session, ResolvedConflict  # Import Session and ResolvedConflict
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 def resolve_day_conflicts(scheduler, session_id):
     """
@@ -16,8 +16,8 @@ def resolve_day_conflicts(scheduler, session_id):
     :return: A list of dictionaries detailing the successful changes.
     """
     changes_made = []
-    session = Session() # Create a new session
-    
+    session = Session()  # Create a new session
+
     try:
         conflicts_df = pd.read_excel("student_day_conflicts_after_optimization.xlsx")
         conflicted_student_ids = conflicts_df['Student_ID'].unique()
@@ -47,37 +47,39 @@ def resolve_day_conflicts(scheduler, session_id):
         for conflict_date, exams in exams_by_day.items():
             if len(exams) > 1:
                 logging.info(f"Conflict found for student {student_id} on {conflict_date} with {len(exams)} exams.")
-                
+
                 # Try to move one of the conflicting exams
                 for exam_to_move in exams:
                     original_section = exam_to_move['Section']
                     subject_to_move = exam_to_move['Subject']
                     instructor_to_match = exam_to_move['Instructor']
-                    
-                    logging.info(f"Attempting to move '{subject_to_move}' (section: {original_section}) for instructor '{instructor_to_match}'")
+
+                    logging.info(
+                        f"Attempting to move '{subject_to_move}' (section: {original_section}) for instructor '{instructor_to_match}'")
 
                     # Find other sections for the same subject and instructor
                     alternative_sections = all_exam_groups[
                         (all_exam_groups['Subject'] == subject_to_move) &
                         (all_exam_groups['Instructor'] == instructor_to_match) &
                         (all_exam_groups['Section'] != original_section)
-                    ]
+                        ]
+
+                    move_successful = False  # Initialize here to avoid UnboundLocalError
 
                     if alternative_sections.empty:
                         logging.warning(f"No alternative sections found for subject '{subject_to_move}'.")
                         continue
 
-                    move_successful = False
                     for _, alt_section_row in alternative_sections.iterrows():
                         alt_section_id = alt_section_row['Section']
-                        
+
                         alt_schedule = all_sections_schedule[all_sections_schedule['Section'] == alt_section_id]
                         if alt_schedule.empty:
                             continue
-                        
+
                         alt_schedule_info = alt_schedule.iloc[0]
                         new_date = alt_schedule_info['Date']
-                        
+
                         # 1. Check if the new date is different and not another conflict day for the student
                         if new_date == conflict_date or new_date in exams_by_day:
                             continue
@@ -101,14 +103,16 @@ def resolve_day_conflicts(scheduler, session_id):
                             # Update scheduler's in-memory data
                             # a) Update exams_df (student's enrollment)
                             scheduler.exams_df.loc[
-                                (scheduler.exams_df['fake_id'] == student_id) & 
+                                (scheduler.exams_df['fake_id'] == student_id) &
                                 (scheduler.exams_df['Section'] == original_section), 'Section'
                             ] = alt_section_id
 
                             # b) Update schedule_df (student counts)
-                            scheduler.schedule_df.loc[scheduler.schedule_df['Section'] == original_section, 'Students_Count'] -= 1
-                            scheduler.schedule_df.loc[scheduler.schedule_df['Section'] == alt_section_id, 'Students_Count'] += 1
-                            
+                            scheduler.schedule_df.loc[
+                                scheduler.schedule_df['Section'] == original_section, 'Students_Count'] -= 1
+                            scheduler.schedule_df.loc[
+                                scheduler.schedule_df['Section'] == alt_section_id, 'Students_Count'] += 1
+
                             changes_made.append({
                                 "student": student_id,
                                 "switched": {
@@ -117,7 +121,7 @@ def resolve_day_conflicts(scheduler, session_id):
                                     "to": alt_section_id
                                 }
                             })
-                            
+
                             resolved_conflict = ResolvedConflict(
                                 session_id=session_id,
                                 student_id=student_id,
@@ -126,18 +130,17 @@ def resolve_day_conflicts(scheduler, session_id):
                                 new_section=alt_section_id
                             )
                             session.add(resolved_conflict)
-                            
+
                             move_successful = True
-                            break # Move to the next student
-                    
+                            break  # Break out of the alternative sections loop
+
                     if move_successful:
-                        break # Move to the next student
-                
+                        break  # Break out of the exams_to_move loop
+
                 if move_successful:
-                    break # Move to the next student
+                    break  # Break out of the conflict_date loop
 
     logging.info(f"Conflict resolution finished. Total changes made: {len(changes_made)}")
     session.commit()
     session.close()
     return changes_made
-
