@@ -44,6 +44,10 @@ def check_all_students_conflicts(scheduler):
                 logging.warning(f"Для студента {student_id} нет расписания. Пропуск.")
                 continue
 
+            # --- ИЗМЕНЕНИЕ: Исключаем экзамены без реального времени ---
+            student_schedule = student_schedule[student_schedule['Time_Slot'] != 'N/A'].copy()
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
             # Проверка конфликтов по слотам
             exams_by_date_slot = defaultdict(list)
             for _, exam in student_schedule.iterrows():
@@ -146,6 +150,10 @@ def get_student_conflicts(scheduler):
 
             if student_schedule.empty:
                 continue
+
+            # --- ИЗМЕНЕНИЕ: Исключаем экзамены без реального времени ---
+            student_schedule = student_schedule[student_schedule['Time_Slot'] != 'N/A'].copy()
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
             exams_by_date = defaultdict(list)
             for _, exam in student_schedule.iterrows():
