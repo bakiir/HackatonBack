@@ -2,8 +2,6 @@ from functools import wraps
 
 import bcrypt
 
-import jwt  
-
 from datetime import datetime, timedelta
 
 from flask import jsonify

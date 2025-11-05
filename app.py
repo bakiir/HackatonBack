@@ -94,14 +94,18 @@ current_scheduler = None
 from create_db import ExamSession, engine, ExamSessionDraft, AdminStatusDraft, ClassroomSlot, update_classroom_slots
 
 
-@app.route('/api/classroom/107/free-slots', methods=['GET'])
-def get_free_classroom_107_slots():
+@app.route('/api/classroom/free-slots', methods=['GET'])
+def get_free_classroom_slots():
     session = Session()
     try:
-        free_slots = session.query(ClassroomSlot).filter_by(classroom_number='107', is_booked=False).all()
+        classroom_number = request.args.get('classroom_number')
+        query = session.query(ClassroomSlot).filter_by(is_booked=False)
+        if classroom_number:
+            query = query.filter_by(classroom_number=classroom_number)
+        free_slots = query.all()
         return jsonify([slot.to_dict() for slot in free_slots]), 200
     except Exception as e:
-        logging.error(f"Error getting free slots for classroom 107: {traceback.format_exc()}")
+        logging.error(f"Error getting free slots: {traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()
