@@ -1217,13 +1217,13 @@ class ExamScheduler:
 
             # --- ИЗМЕНЕНИЕ: Добавление экзаменов без 'has_exam' ---
             if not no_exam_groups.empty and self.custom_dates:
-                last_day = self.custom_dates[-1].strftime('%Y-%m-%d')
-                logging.info(f"Добавление {len(no_exam_groups)} экзаменов без флага 'has_exam' на последний день: {last_day}")
+                logging.info(f"Добавление {len(no_exam_groups)} экзаменов без флага 'has_exam' на случайный день.")
 
                 for _, group in no_exam_groups.iterrows():
+                    random_day = random.choice(self.custom_dates).strftime('%Y-%m-%d')
                     num_students = len(self.exams_df[self.exams_df['Section'] == group['Section']])
                     no_exam_record = {
-                        'Date': last_day,
+                        'Date': random_day,
                         'Subject': group['Subject'],
                         'Instructor': group['Instructor'],
                         'EduProgram': group['EduProgram'],

@@ -10,7 +10,7 @@ from flask_jwt_extended import jwt_required, get_jwt, create_access_token
 # Секретный ключ для подписи JWT
 SECRET_KEY = "your-secret-key"  # Замените на реальный секретный ключ
 ALGORITHM = "HS256"  # Алгоритм подписи
-ACCESS_TOKEN_EXPIRE_MINUTES = 30  # Время жизни токена (в минутах)
+ACCESS_TOKEN_EXPIRE_MINUTES = 2880  # Время жизни токена (в минутах)
 
 def generate_access_token(identity: str, role: str):
     """
