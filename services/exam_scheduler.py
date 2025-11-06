@@ -251,6 +251,9 @@ class ExamScheduler:
             'Факультет студента': 'Faculty'
         }
         self.exams_df.rename(columns=column_mapping, inplace=True)
+        if 'fake_name' not in self.exams_df.columns:
+            if 'name' in self.exams_df.columns:
+                self.exams_df.rename(columns={'name': 'fake_name'}, inplace=True)
         
         if 'Дисциплина' in self.exams_df.columns and 'Subject' not in self.exams_df.columns:
             self.exams_df.rename(columns={'Дисциплина': 'Subject'}, inplace=True)
