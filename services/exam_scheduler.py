@@ -273,7 +273,7 @@ class ExamScheduler:
         self.exam_groups['has_exam'] = True
 
         # Нормализация списка комнат
-        self.rooms = list(self.rooms_df[self.rooms_df['Аудитория'].astype(str).str.strip() != '107']['Аудитория'].astype(str).str.strip())
+        self.rooms = list(self.rooms_df['Аудитория'].astype(str).str.strip())
 
         logging.info(f"Загружено комнат: {len(self.rooms)}")
         logging.info(f"Пример комнат: {self.rooms[:5]}")  # Логируем первые 5 комнат для проверки
@@ -417,139 +417,8 @@ class ExamScheduler:
         self.custom_dates = self._generate_initial_dates()
 
     def _schedule_large_groups_in_107(self, exam_groups_df):
-        from create_db import ClassroomSlot, Session
-        import json
-
-        logging.info("Запуск приоритетного планирования для аудитории 107.")
-        session = Session()
-        try:
-            # 1. Найти подходящие группы для объединения
-            exam_groups_df['student_count'] = exam_groups_df['Section'].map(
-                lambda x: len(self.exams_df[self.exams_df['Section'] == x])
-            )
-            
-            subject_groups = exam_groups_df.groupby('Subject').agg(
-                total_students=('student_count', 'sum'),
-                section_count=('Section', 'count'),
-                sections=('Section', lambda x: list(x))
-            ).reset_index()
-
-            # Фильтр для кандидатов в 107 аудиторию (от 2 до 4 секций, от 80 до 200 студентов)
-            candidates = subject_groups[
-                (subject_groups['section_count'].between(2, 4)) &
-                (subject_groups['total_students'].between(80, 200))
-            ].sort_values('total_students', ascending=False)
-
-            if candidates.empty:
-                logging.info("Не найдено подходящих групп для приоритетного планирования в ауд. 107.")
-                return exam_groups_df, 0
-
-            # 2. Получить свободные слоты из БД
-            free_slots = session.query(ClassroomSlot).filter_by(
-                classroom_number='107', is_booked=False
-            ).order_by(ClassroomSlot.start_time).all()
-
-            if not free_slots:
-                logging.info("Нет свободных слотов в ауд. 107.")
-                return exam_groups_df, 0
-
-            scheduled_sections = set()
-            scheduled_count = 0
-
-            # 3. Итерация по кандидатам и слотам
-            for _, candidate_row in candidates.iterrows():
-                sections_to_schedule = candidate_row['sections']
-                
-                # Пропускаем, если какая-то из секций уже запланирована
-                if any(s in scheduled_sections for s in sections_to_schedule):
-                    continue
-
-                all_students_in_group = set()
-                for section_id in sections_to_schedule:
-                    section_students = set(self.exams_df[self.exams_df['Section'] == section_id]['fake_id'])
-                    all_students_in_group.update(section_students)
-
-                # Ищем подходящий слот
-                for slot in free_slots:
-                    if slot.is_booked:
-                        continue
-
-                    # Проверка конфликтов студентов
-                    has_conflict = False
-                    slot_date_str = slot.start_time.strftime('%Y-%m-%d')
-                    for student in all_students_in_group:
-                        if student in self.student_exams:
-                            for exam in self.student_exams[student]:
-                                if exam['Date'] == slot_date_str:
-                                    has_conflict = True
-                                    break
-                        if has_conflict:
-                            break
-                    
-                    if has_conflict:
-                        continue # Переходим к следующему слоту
-
-                    # Если конфликтов нет, бронируем слот
-                    slot.is_booked = True
-                    slot.booked_groups_info = json.dumps({
-                        'subject': candidate_row['Subject'],
-                        'sections': sections_to_schedule
-                    }, ensure_ascii=False)
-                    
-                    base_time_slot = f"{slot.start_time.strftime('%H:%M')}-{slot.end_time.strftime('%H:%M')}"
-
-                    # Создаем записи в расписании для каждой секции
-                    for section_id in sections_to_schedule:
-                        group_info = exam_groups_df[exam_groups_df['Section'] == section_id].iloc[0]
-                        num_students = group_info['student_count']
-                        
-                        exam_record = {
-                            'Date': slot_date_str,
-                            'Subject': group_info['Subject'],
-                            'Instructor': group_info['Instructor'],
-                            'EduProgram': group_info['EduProgram'],
-                            'Section': section_id,
-                            'Students_Count': int(num_students),
-                            'Room': '107',
-                            'Time_Slot': base_time_slot,
-                            'Base_Time_Slot': base_time_slot,
-                            'Duration': int(group_info.get('Duration', 180)),
-                            'Student_Conflicts': 0,
-                            'proctor_needed': group_info.get('proctor_needed', False)
-                        }
-                        self.schedule.append(exam_record)
-
-                        # Обновляем расписание студентов
-                        section_students_list = self.exams_df[self.exams_df['Section'] == section_id]['fake_id'].tolist()
-                        for student in section_students_list:
-                            if student not in self.student_exams:
-                                self.student_exams[student] = []
-                            self.student_exams[student].append(exam_record)
-
-                        scheduled_sections.add(section_id)
-                        scheduled_count += 1
-
-                    logging.info(f"Аудитория 107 забронирована для предмета '{candidate_row['Subject']}' ({len(sections_to_schedule)} секции) на {slot_date_str} {base_time_slot}")
-                    
-                    # Удаляем слот из списка доступных, чтобы не использовать его снова
-                    free_slots.remove(slot)
-                    break # Переходим к следующей группе кандидатов
-
-            session.commit()
-            
-            # 4. Возвращаем обновленный DataFrame без запланированных секций
-            remaining_groups_df = exam_groups_df[~exam_groups_df['Section'].isin(scheduled_sections)].copy()
-            remaining_groups_df = remaining_groups_df.drop(columns=['student_count']) # Удаляем временную колонку
-            
-            logging.info(f"Завершено приоритетное планирование. Запланировано секций в ауд. 107: {scheduled_count}")
-            return remaining_groups_df, scheduled_count
-
-        except Exception as e:
-            logging.error(f"Ошибка в приоритетном планировании для ауд. 107: {traceback.format_exc()}")
-            session.rollback()
-            return exam_groups_df, 0
-        finally:
-            session.close()
+        logging.info("Приоритетное планирование для аудитории 107 отключено. Аудитория будет использоваться как обычная.")
+        return exam_groups_df, 0
 
     def manage_subjects_before_scheduling(self):
 
@@ -903,8 +772,8 @@ class ExamScheduler:
             # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
             # --- НОВАЯ ЛОГИКА: ПРИОРИТЕТНОЕ ПЛАНИРОВАНИЕ АУДИТОРИИ 107 ---
-            # groups_to_schedule, scheduled_in_107 = self._schedule_large_groups_in_107(groups_to_schedule)
-            # success_count += scheduled_in_107
+            groups_to_schedule, scheduled_in_107 = self._schedule_large_groups_in_107(groups_to_schedule)
+            success_count += scheduled_in_107
             # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
 
             if groups_to_schedule.empty:
@@ -1038,6 +907,8 @@ class ExamScheduler:
                                     if self.room_capacities.get(room, 0) >= num_students
                                 ]
                                 if available_rooms:
+                                    # Сортируем по вместимости, чтобы выбрать наименьшую подходящую аудиторию
+                                    available_rooms.sort(key=lambda r: self.room_capacities.get(r, 0))
                                     room = available_rooms[0]
                                     best_slots.append((day, slot, actual_slot, room, cost))
 
@@ -1173,6 +1044,8 @@ class ExamScheduler:
                                         if self.room_capacities.get(room, 0) >= num_students
                                     ]
                                     if available_rooms:
+                                        # Сортируем по вместимости, чтобы выбрать наименьшую подходящую аудиторию
+                                        available_rooms.sort(key=lambda r: self.room_capacities.get(r, 0))
                                         room = available_rooms[0]
                                         best_slots.append((day, slot, actual_slot, room, cost))
 
