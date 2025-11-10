@@ -173,7 +173,7 @@ Base.metadata.create_all(engine)
 # Создаем фабрику сессий
 Session = sessionmaker(bind=engine)
 
-def update_classroom_slots(start_date, num_days, rooms_df):
+def update_classroom_slots(dates, rooms_df):
     from datetime import datetime, timedelta
 
     session = Session()
@@ -182,9 +182,8 @@ def update_classroom_slots(start_date, num_days, rooms_df):
     session.query(ClassroomSlot).delete()
 
     # Создаем новые слоты
-    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-    for day in range(num_days):
-        current_date = start_date + timedelta(days=day)
+    for date_str in dates:
+        current_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         slot_times = [
             (datetime.combine(current_date, datetime.min.time()).replace(hour=8, minute=0), datetime.combine(current_date, datetime.min.time()).replace(hour=11, minute=0)),
             (datetime.combine(current_date, datetime.min.time()).replace(hour=11, minute=30), datetime.combine(current_date, datetime.min.time()).replace(hour=14, minute=30)),
@@ -202,11 +201,11 @@ def update_classroom_slots(start_date, num_days, rooms_df):
             
     session.commit()
     session.close()
-    print(f"Classroom slots have been updated for {num_days} days, starting from {start_date}.")
+    print(f"Classroom slots have been updated for {len(dates)} days.")
 
 
 if __name__ == '__main__':
     # Example usage for update_classroom_slots
     rooms_data = {'Аудитория': ['101', '102', '107', '202', '203']}
     rooms_df = pd.DataFrame(rooms_data)
-    update_classroom_slots('2025-10-22', 14, rooms_df)
+    update_classroom_slots(['2025-10-22'], rooms_df)

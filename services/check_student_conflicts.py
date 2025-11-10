@@ -1,181 +1,130 @@
-import logging
+from datetime import datetime
 from collections import defaultdict
+import logging
 import pandas as pd
-
-# Настройка логирования (в консоль и файл)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[
-    logging.StreamHandler(),
-    logging.FileHandler('student_conflicts_log.txt')
-])
 
 def check_all_students_conflicts(scheduler):
     """
-    Проверяет всех студентов на конфликты (>1 экзамена в день в одном временном слоте).
-    Формат вывода: <Student_ID>, Дата <YYYY-MM-DD>: <N> экзаменов (>1 в слоте), Предметы: <Subject1>, <Subject2>, ...
-    Также выводит конфликты по дням для отладки.
-
-    :param scheduler: Экземпляр класса ExamScheduler после оптимизации.
+    Проверяет всех студентов на конфликты (>1 экзамена в день с пересечением по времени).
+    Формат вывода: <Student_ID>, Дата <YYYY-MM-DD>: <N> экзаменов с конфликтом, Предметы: <Subject1> vs <Subject2>, ...
     """
     if not scheduler:
         logging.error("Scheduler не инициализирован!")
         return
 
-    # Получаем всех студентов
-    if hasattr(scheduler, 'exams_df') and not scheduler.exams_df.empty:
-        all_students = scheduler.exams_df['fake_id'].unique()
-    elif hasattr(scheduler, 'student_exams'):
-        all_students = list(scheduler.student_exams.keys())
-    else:
-        logging.error("Нет данных о студентах! Проверьте exams_df или student_exams.")
-        return
-
+    all_students = list(scheduler.student_exams.keys())
     total_students = len(all_students)
-    conflict_students = 0
+    conflict_students_set = set()
     conflict_details = []
-    day_conflict_details = []
 
-    logging.info(f"Проверка конфликтов (>1 экзамена в день в одном слоте) для {total_students} студентов...")
+    logging.info(f"Проверка временных конфликтов для {total_students} студентов...")
 
     for student_id in all_students:
-        try:
-            student_schedule = scheduler.get_student_sections(student_id)
+        if student_id not in scheduler.student_exams:
+            continue
 
-            if student_schedule.empty:
-                logging.warning(f"Для студента {student_id} нет расписания. Пропуск.")
-                continue
+        exams = scheduler.student_exams[student_id]
+        
+        exams_by_date = defaultdict(list)
+        for exam in exams:
+            if exam.get('Time_Slot') and exam['Time_Slot'] != 'N/A':
+                exams_by_date[exam['Date']].append(exam)
 
-            # --- ИЗМЕНЕНИЕ: Исключаем экзамены без реального времени (N/A или пустые) ---
-            student_schedule = student_schedule[
-                (student_schedule['Time_Slot'].notna()) &
-                (student_schedule['Time_Slot'] != 'N/A')
-            ].copy()
-            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+        for date, daily_exams in exams_by_date.items():
+            if len(daily_exams) > 1:
+                # Проверяем каждую пару экзаменов на пересечение
+                for i in range(len(daily_exams)):
+                    for j in range(i + 1, len(daily_exams)):
+                        e1 = daily_exams[i]
+                        e2 = daily_exams[j]
+                        
+                        try:
+                            e1_start = datetime.strptime(e1['Time_Slot'].split('-')[0], '%H:%M')
+                            e1_end = datetime.strptime(e1['Time_Slot'].split('-')[1], '%H:%M')
+                            e2_start = datetime.strptime(e2['Time_Slot'].split('-')[0], '%H:%M')
+                            e2_end = datetime.strptime(e2['Time_Slot'].split('-')[1], '%H:%M')
 
-            # Проверка конфликтов по слотам
-            exams_by_date_slot = defaultdict(list)
-            for _, exam in student_schedule.iterrows():
-                date = exam['Date']
-                time_slot = exam['Time_Slot'].strip()
-                subject = exam['Subject'].strip()
-                exams_by_date_slot[(date, time_slot)].append(subject)
+                            # Если интервалы пересекаются
+                            if e1_start < e2_end and e2_start < e1_end:
+                                conflict_students_set.add(student_id)
+                                conflict_info = {
+                                    'Student_ID': student_id,
+                                    'Conflict_Date': date,
+                                    'Exams': f"{e1.get('Subject', 'N/A')} vs {e2.get('Subject', 'N/A')}",
+                                    'Time_Slots': f"{e1['Time_Slot']} vs {e2['Time_Slot']}"
+                                }
+                                conflict_details.append(conflict_info)
+                                logging.warning(f"КОНФЛИКТ: Студент {student_id}, Дата {date}, "
+                                                f"Пересечение: {e1.get('Subject')} ({e1['Time_Slot']}) и "
+                                                f"{e2.get('Subject')} ({e2['Time_Slot']})")
+                        except (ValueError, IndexError) as e:
+                            logging.error(f"Ошибка парсинга времени для студента {student_id} в дате {date}: {e}")
 
-            for (date, time_slot), subjects in exams_by_date_slot.items():
-                if len(subjects) > 1:
-                    conflict_students += 1
-                    subjects_str = ", ".join(subjects)
-                    logging.warning(f"{student_id}, Дата {date}: {len(subjects)} экзаменов (>1 в слоте {time_slot}), Предметы: {subjects_str}")
+    conflict_count = len(conflict_students_set)
+    logging.info(f"Проверка завершена. Студентов с конфликтами: "
+                 f"{conflict_count} из {total_students} ({conflict_count / total_students * 100:.2f}%)")
 
-                    conflict_details.append({
-                        'Student_ID': student_id,
-                        'Conflict_Date': date,
-                        'Time_Slot': time_slot,
-                        'Exam_Count': len(subjects),
-                        'Subjects': subjects_str
-                    })
-
-            # Проверка конфликтов по дням (для отладки)
-            exams_by_date = defaultdict(list)
-            for _, exam in student_schedule.iterrows():
-                date = exam['Date']
-                subject = exam['Subject'].strip()
-                exams_by_date[date].append(subject)
-            for date, subjects in exams_by_date.items():
-                if len(subjects) > 1:
-                    subjects_str = ", ".join(subjects)
-                    day_conflict_details.append({
-                        'Student_ID': student_id,
-                        'Conflict_Date': date,
-                        'Exam_Count': len(subjects),
-                        'Subjects': subjects_str
-                    })
-                    break
-
-        except Exception as e:
-            logging.error(f"Ошибка при проверке студента {student_id}: {str(e)}")
-
-    # Итоговый лог для конфликтов по слотам
-    logging.info(f"Проверка завершена. Студентов с конфликтами (>1 экзамена в слоте): "
-                 f"{conflict_students} из {total_students} ({conflict_students / total_students * 100:.2f}%)")
-
-    # Сохранение конфликтов по слотам в Excel
     if conflict_details:
         conflict_df = pd.DataFrame(conflict_details)
         output_file = "student_conflicts_after_optimization.xlsx"
         try:
             conflict_df.to_excel(output_file, index=False)
-            logging.info(f"Конфликтные студенты (>1 в слоте) сохранены в файл: {output_file}")
+            logging.info(f"Детали конфликтов сохранены в файл: {output_file}")
         except Exception as e:
             logging.error(f"Ошибка при сохранении в Excel: {str(e)}")
     else:
-        logging.info("Конфликтных студентов (>1 в слоте) нет, Excel не создан.")
-
-    # Лог и Excel для конфликтов по дням (для отладки)
-    if day_conflict_details:
-        logging.warning(f"Найдено {len(day_conflict_details)} студентов с конфликтами по дням (>1 экзамена в день):")
-        for detail in day_conflict_details:
-            logging.warning(f"{detail['Student_ID']}, Дата {detail['Conflict_Date']}: {detail['Exam_Count']} экзаменов (>1 в день), Предметы: {detail['Subjects']}")
-        day_conflict_df = pd.DataFrame(day_conflict_details)
-        day_output_file = "student_day_conflicts_after_optimization.xlsx"
-        try:
-            day_conflict_df.to_excel(day_output_file, index=False)
-            logging.info(f"Конфликтные студенты (>1 в день) сохранены в файл: {day_output_file}")
-        except Exception as e:
-            logging.error(f"Ошибка при сохранении конфликтов по дням в Excel: {str(e)}")
-    else:
-        logging.info("Конфликтных студентов по дням (>1 экзамена в день) нет.")
+        logging.info("Временных конфликтов не найдено.")
 
 
 def get_student_conflicts(scheduler):
     """
-    Проверяет всех студентов на конфликты (>1 экзамена в день)
+    Проверяет всех студентов на конфликты (>1 экзамена в день с пересечением по времени)
     и возвращает список конфликтов.
-
-    :param scheduler: Экземпляр класса ExamScheduler.
-    :return: Список словарей с деталями конфликтов.
     """
     if not scheduler:
         logging.error("Scheduler не инициализирован!")
         return []
 
-    if hasattr(scheduler, 'exams_df') and not scheduler.exams_df.empty:
-        all_students = scheduler.exams_df['fake_id'].unique()
-    elif hasattr(scheduler, 'student_exams'):
-        all_students = list(scheduler.student_exams.keys())
-    else:
-        logging.error("Нет данных о студентах! Проверьте exams_df или student_exams.")
-        return []
-
+    all_students = list(scheduler.student_exams.keys())
     conflict_details = []
 
     for student_id in all_students:
-        try:
-            student_schedule = scheduler.get_student_sections(student_id)
+        if student_id not in scheduler.student_exams:
+            continue
 
-            if student_schedule.empty:
-                continue
+        exams = scheduler.student_exams[student_id]
+        
+        exams_by_date = defaultdict(list)
+        for exam in exams:
+            if exam.get('Time_Slot') and exam['Time_Slot'] != 'N/A':
+                exams_by_date[exam['Date']].append(exam)
 
-            # --- ИЗМЕНЕНИЕ: Исключаем экзамены без реального времени (N/A или пустые) ---
-            student_schedule = student_schedule[
-                (student_schedule['Time_Slot'].notna()) &
-                (student_schedule['Time_Slot'] != 'N/A')
-            ].copy()
-            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+        for date, daily_exams in exams_by_date.items():
+            if len(daily_exams) > 1:
+                # --- DEBUG LOGGING ---
+                logging.info(f"Checking conflicts for student {student_id} on date {date} with exams: {daily_exams}")
+                # --- END DEBUG LOGGING ---
+                for i in range(len(daily_exams)):
+                    for j in range(i + 1, len(daily_exams)):
+                        e1 = daily_exams[i]
+                        e2 = daily_exams[j]
+                        
+                        try:
+                            e1_start = datetime.strptime(e1['Time_Slot'].split('-')[0], '%H:%M')
+                            e1_end = datetime.strptime(e1['Time_Slot'].split('-')[1], '%H:%M')
+                            e2_start = datetime.strptime(e2['Time_Slot'].split('-')[0], '%H:%M')
+                            e2_end = datetime.strptime(e2['Time_Slot'].split('-')[1], '%H:%M')
 
-            exams_by_date = defaultdict(list)
-            for _, exam in student_schedule.iterrows():
-                date = exam['Date']
-                subject = exam['Subject'].strip()
-                time_slot = exam['Time_Slot'].strip()
-                exams_by_date[date].append(f"{subject} ({time_slot})")
-
-            for date, subjects in exams_by_date.items():
-                if len(subjects) > 1:
-                    conflict_details.append({
-                        'student': student_id,
-                        'date': date,
-                        'subjects': subjects
-                    })
-        except Exception as e:
-            logging.error(f"Ошибка при проверке студента {student_id}: {str(e)}")
-
+                            if e1_start < e2_end and e2_start < e1_end:
+                                conflict_details.append({
+                                    'student': student_id,
+                                    'date': date,
+                                    'subjects': [f"{e.get('Subject')} ({e.get('Time_Slot')})" for e in daily_exams]
+                                })
+                                break 
+                        except (ValueError, IndexError):
+                            continue
+                    else:
+                        continue
+                    break
     return conflict_details
