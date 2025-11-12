@@ -1,146 +1,136 @@
-import pandas as pd
 import logging
 from collections import defaultdict
-from create_db import Session, ResolvedConflict  # Import Session and ResolvedConflict
+import pandas as pd
+from create_db import Session, ResolvedConflict
+from services.check_student_conflicts import get_student_conflicts
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def resolve_day_conflicts(scheduler, session_id):
+def resolve_conflicts_by_moving_student(scheduler, session_id):
     """
-    Tries to resolve student exam conflicts where a student has more than one exam on the same day.
-    It attempts to move one of the conflicting exams to a different group of the same subject on a different day.
-
-    :param scheduler: An instance of the ExamScheduler class.
-    :param session_id: The ID of the current exam session.
-    :return: A list of dictionaries detailing the successful changes.
+    Пытается разрешить конфликты, перемещая студента в другую секцию того же предмета в другой день.
+    :param scheduler: Экземпляр ExamScheduler.
+    :param session_id: ID текущей сессии экзаменов.
+    :return: Список словарей с информацией о внесенных изменениях.
     """
     changes_made = []
-    session = Session()  # Create a new session
+    session = Session()
 
     try:
-        conflicts_df = pd.read_excel("student_day_conflicts_after_optimization.xlsx")
-        conflicted_student_ids = conflicts_df['Student_ID'].unique()
-        logging.info(f"Loaded {len(conflicted_student_ids)} students with day conflicts.")
-    except FileNotFoundError:
-        logging.error("Conflict file 'student_day_conflicts_after_optimization.xlsx' not found.")
-        return {"error": "Conflict file not found."}
+        # 1. Получаем конфликты напрямую из функции
+        conflicts = get_student_conflicts(scheduler)
+        if not conflicts:
+            logging.info("Студенческих конфликтов для разрешения не найдено.")
+            return []
 
-    # Get all sections and their schedules once to avoid repeated lookups
-    all_sections_schedule = scheduler.schedule_df
-    all_exam_groups = scheduler.exam_groups
-    room_capacities = scheduler.room_capacities
+        logging.info(f"Найдено {len(conflicts)} студенто-дней с конфликтами для обработки.")
 
-    for student_id in conflicted_student_ids:
-        student_id = str(student_id)
-        logging.info(f"--- Processing student: {student_id} ---")
+        # Кэшируем данные для производительности
+        all_sections_schedule = scheduler.schedule_df
+        all_exam_groups = scheduler.exam_groups
+        room_capacities = scheduler.room_capacities
+        
+        # Собираем все конфликтные дни для каждого студента
+        student_conflict_dates = defaultdict(set)
+        for c in conflicts:
+            student_conflict_dates[c['student']].add(c['date'])
 
-        student_schedule_df = scheduler.get_student_sections(student_id)
-        if student_schedule_df.empty:
-            logging.warning(f"Could not retrieve schedule for student {student_id}. Skipping.")
-            continue
+        for conflict in conflicts:
+            student_id = conflict['student']
+            conflict_date = conflict['date']
+            conflicting_exams = conflict['exams']
 
-        exams_by_day = defaultdict(list)
-        for _, exam in student_schedule_df.iterrows():
-            exams_by_day[exam['Date']].append(exam.to_dict())
+            logging.info(f"--- Обработка студента: {student_id} в день {conflict_date} ---")
 
-        for conflict_date, exams in exams_by_day.items():
-            if len(exams) > 1:
-                logging.info(f"Conflict found for student {student_id} on {conflict_date} with {len(exams)} exams.")
+            # Сортируем экзамены, чтобы сначала пытаться переместить экзамен с меньшим числом студентов
+            conflicting_exams.sort(key=lambda x: x['Students_Count'])
 
-                # Try to move one of the conflicting exams
-                for exam_to_move in exams:
-                    original_section = exam_to_move['Section']
-                    subject_to_move = exam_to_move['Subject']
-                    instructor_to_match = exam_to_move['Instructor']
+            move_successful_for_day = False
+            for exam_to_move in conflicting_exams:
+                original_section = exam_to_move['Section']
+                subject_to_move = exam_to_move['Subject']
 
-                    logging.info(
-                        f"Attempting to move '{subject_to_move}' (section: {original_section}) for instructor '{instructor_to_match}'")
+                logging.info(f"Попытка переместить экзамен '{subject_to_move}' (секция: {original_section})")
 
-                    # Find other sections for the same subject and instructor
-                    alternative_sections = all_exam_groups[
-                        (all_exam_groups['Subject'] == subject_to_move) &
-                        (all_exam_groups['Instructor'] == instructor_to_match) &
-                        (all_exam_groups['Section'] != original_section)
-                        ]
+                # Ищем альтернативные секции того же предмета
+                alternative_sections = all_exam_groups[
+                    (all_exam_groups['Subject'] == subject_to_move) &
+                    (all_exam_groups['Section'] != original_section)
+                ]
 
-                    move_successful = False  # Initialize here to avoid UnboundLocalError
+                if alternative_sections.empty:
+                    logging.warning(f"Нет альтернативных секций для предмета '{subject_to_move}'.")
+                    continue
 
-                    if alternative_sections.empty:
-                        logging.warning(f"No alternative sections found for subject '{subject_to_move}'.")
+                for _, alt_section_row in alternative_sections.iterrows():
+                    alt_section_id = alt_section_row['Section']
+                    alt_schedule = all_sections_schedule[all_sections_schedule['Section'] == alt_section_id]
+
+                    if alt_schedule.empty:
                         continue
 
-                    for _, alt_section_row in alternative_sections.iterrows():
-                        alt_section_id = alt_section_row['Section']
+                    alt_schedule_info = alt_schedule.iloc[0]
+                    new_date = alt_schedule_info['Date']
 
-                        alt_schedule = all_sections_schedule[all_sections_schedule['Section'] == alt_section_id]
-                        if alt_schedule.empty:
-                            continue
+                    # Проверка 1: Новый день не должен быть днем исходного конфликта
+                    if new_date == conflict_date:
+                        continue
+                    
+                    # Проверка 2: Новый день не должен быть другим конфликтным днем для этого студента
+                    if new_date in student_conflict_dates.get(student_id, set()):
+                        continue
 
-                        alt_schedule_info = alt_schedule.iloc[0]
-                        new_date = alt_schedule_info['Date']
+                    # Проверка 3: Наличие свободного места
+                    room_name = str(alt_schedule_info['Room'])
+                    capacity = sum(room_capacities.get(r.strip(), 0) for r in room_name.split(','))
+                    current_students = alt_schedule_info['Students_Count']
 
-                        # 1. Check if the new date is different and not another conflict day for the student
-                        if new_date == conflict_date or new_date in exams_by_day:
-                            continue
+                    if current_students < capacity:
+                        logging.info(f"Найдено валидное перемещение для студента {student_id}:")
+                        logging.info(f"  Из: Секция {original_section} ({subject_to_move}) в день {conflict_date}")
+                        logging.info(f"  В:  Секция {alt_section_id} ({subject_to_move}) в день {new_date}")
 
-                        # 2. Check for available space
-                        room_name = alt_schedule_info['Room']
-                        # Clean room name if it has capacity in it e.g. "101(25)"
-                        room_name = str(room_name)
-                        if '(' in room_name:
-                            room_name = room_name.split('(')[0].strip()
+                        # Обновляем данные в памяти планировщика
+                        scheduler.exams_df.loc[
+                            (scheduler.exams_df['fake_id'] == student_id) &
+                            (scheduler.exams_df['Section'] == original_section), 'Section'
+                        ] = alt_section_id
 
-                        capacity = room_capacities.get(room_name, 0)
-                        current_students = alt_schedule_info['Students_Count']
+                        scheduler.schedule_df.loc[scheduler.schedule_df['Section'] == original_section, 'Students_Count'] -= 1
+                        scheduler.schedule_df.loc[scheduler.schedule_df['Section'] == alt_section_id, 'Students_Count'] += 1
 
-                        if current_students < capacity:
-                            # This is a valid move
-                            logging.info(f"Found valid move for student {student_id}:")
-                            logging.info(f"  From: Section {original_section} ({subject_to_move}) on {conflict_date}")
-                            logging.info(f"  To:   Section {alt_section_id} ({subject_to_move}) on {new_date}")
+                        # Записываем изменения для отчета и БД
+                        changes_made.append({
+                            "student": student_id,
+                            "subject": subject_to_move,
+                            "from_section": original_section,
+                            "to_section": alt_section_id,
+                            "from_date": conflict_date,
+                            "to_date": new_date
+                        })
 
-                            # Update scheduler's in-memory data
-                            # a) Update exams_df (student's enrollment)
-                            scheduler.exams_df.loc[
-                                (scheduler.exams_df['fake_id'] == student_id) &
-                                (scheduler.exams_df['Section'] == original_section), 'Section'
-                            ] = alt_section_id
+                        resolved_conflict = ResolvedConflict(
+                            session_id=session_id,
+                            student_id=student_id,
+                            subject=subject_to_move,
+                            original_section=original_section,
+                            new_section=alt_section_id
+                        )
+                        session.add(resolved_conflict)
+                        
+                        # Обновляем информацию о конфликтах для студента, чтобы не попасть в тот же день снова
+                        student_conflict_dates[student_id].discard(conflict_date)
 
-                            # b) Update schedule_df (student counts)
-                            scheduler.schedule_df.loc[
-                                scheduler.schedule_df['Section'] == original_section, 'Students_Count'] -= 1
-                            scheduler.schedule_df.loc[
-                                scheduler.schedule_df['Section'] == alt_section_id, 'Students_Count'] += 1
+                        move_successful_for_day = True
+                        break  # Переходим к следующему конфликту (студент-день)
+                
+                if move_successful_for_day:
+                    break # Переходим к следующему конфликту (студент-день)
+    
+    finally:
+        session.commit()
+        session.close()
 
-                            changes_made.append({
-                                "student": student_id,
-                                "switched": {
-                                    "subject": subject_to_move,
-                                    "from": original_section,
-                                    "to": alt_section_id
-                                }
-                            })
-
-                            resolved_conflict = ResolvedConflict(
-                                session_id=session_id,
-                                student_id=student_id,
-                                subject=subject_to_move,
-                                original_section=original_section,
-                                new_section=alt_section_id
-                            )
-                            session.add(resolved_conflict)
-
-                            move_successful = True
-                            break  # Break out of the alternative sections loop
-
-                    if move_successful:
-                        break  # Break out of the exams_to_move loop
-
-                if move_successful:
-                    break  # Break out of the conflict_date loop
-
-    logging.info(f"Conflict resolution finished. Total changes made: {len(changes_made)}")
-    session.commit()
-    session.close()
+    logging.info(f"Разрешение конфликтов завершено. Всего внесено изменений: {len(changes_made)}")
     return changes_made

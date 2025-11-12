@@ -173,7 +173,7 @@ Base.metadata.create_all(engine)
 # Создаем фабрику сессий
 Session = sessionmaker(bind=engine)
 
-def update_classroom_slots(dates, rooms_df):
+def update_classroom_slots(dates, rooms_df, time_step=30, work_start_hour=8, work_end_hour=19, work_end_minute=30):
     from datetime import datetime, timedelta
 
     session = Session()
@@ -184,24 +184,29 @@ def update_classroom_slots(dates, rooms_df):
     # Создаем новые слоты
     for date_str in dates:
         current_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        slot_times = [
-            (datetime.combine(current_date, datetime.min.time()).replace(hour=8, minute=0), datetime.combine(current_date, datetime.min.time()).replace(hour=11, minute=0)),
-            (datetime.combine(current_date, datetime.min.time()).replace(hour=11, minute=30), datetime.combine(current_date, datetime.min.time()).replace(hour=14, minute=30)),
-            (datetime.combine(current_date, datetime.min.time()).replace(hour=15, minute=0), datetime.combine(current_date, datetime.min.time()).replace(hour=18, minute=0))
-        ]
         
-        for room in rooms_df['Аудитория']:
-            for start, end in slot_times:
+        start_time = datetime.combine(current_date, datetime.min.time()).replace(hour=work_start_hour)
+        end_time = datetime.combine(current_date, datetime.min.time()).replace(hour=work_end_hour, minute=work_end_minute)
+        
+        current_slot_start = start_time
+        while current_slot_start < end_time:
+            current_slot_end = current_slot_start + timedelta(minutes=time_step)
+            if current_slot_end > end_time:
+                break
+            
+            for room in rooms_df['Аудитория']:
                 slot = ClassroomSlot(
                     classroom_number=str(room),
-                    start_time=start,
-                    end_time=end
+                    start_time=current_slot_start,
+                    end_time=current_slot_end
                 )
                 session.add(slot)
             
+            current_slot_start = current_slot_end
+            
     session.commit()
     session.close()
-    print(f"Classroom slots have been updated for {len(dates)} days.")
+    print(f"Classroom slots have been updated for {len(dates)} days with {time_step}-minute intervals.")
 
 
 if __name__ == '__main__':

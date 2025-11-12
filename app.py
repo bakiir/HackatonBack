@@ -1836,7 +1836,7 @@ def handle_update_durations():
                     'message': 'Каждый экзамен должен содержать section_id и duration'
                 }), 400
 
-            if exam['duration'] not in [60, 120, 180]:
+            if exam['duration'] not in [60, 90, 120, 150, 180]:
                 return jsonify({
                     'status': 'error',
                     'message': 'Длительность экзамена может быть только 60, 120 или 180 минут'
@@ -1949,6 +1949,31 @@ def delete_draft_by_id(draft_id):
         return jsonify({"error": str(e)}), 500
     finally:
         session.close()
+
+@app.route('/api/debug/all_sections', methods=['GET'])
+def get_all_sections_debug():
+    """
+    Диагностический эндпоинт для получения списка всех секций,
+    известных планировщику в данный момент.
+    """
+    global current_scheduler
+    if not current_scheduler:
+        return jsonify({'error': 'Планировщик не инициализирован'}), 400
+    
+    try:
+        # Убедимся, что exam_groups на месте
+        if not hasattr(current_scheduler, 'exam_groups') or current_scheduler.exam_groups.empty:
+             current_scheduler._prepare_data() # Попытка переподготовить данные, если они пусты
+
+        all_sections = current_scheduler.get_all_section_names()
+        return jsonify({
+            'total_sections': len(all_sections),
+            'sections': all_sections
+        })
+    except Exception as e:
+        logging.error(f"Ошибка в /api/debug/all_sections: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
