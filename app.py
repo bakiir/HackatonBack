@@ -289,7 +289,7 @@ def handle_initialization():
                 num_days=num_days
             )
             # 4. Update classroom slots
-            update_classroom_slots(start_date, num_days, current_scheduler.rooms_df)
+            update_classroom_slots(current_scheduler.get_current_dates(), current_scheduler.rooms_df)
 
             # 5. Создание черновика сессии
             session.query(ExamSessionDraft).update({'is_active': False})  # Деактивируем предыдущие черновики
@@ -360,6 +360,7 @@ def manage_dates():
                 }), 400
 
             current_scheduler.remove_date(date_to_remove)
+            update_classroom_slots(current_scheduler.get_current_dates(), current_scheduler.rooms_df)
             logging.info(f'Дата {date_to_remove} удалена')
             return jsonify({
                 'status': 'success',
@@ -376,6 +377,7 @@ def manage_dates():
                 }), 400
 
             current_scheduler.add_custom_date(custom_date)
+            update_classroom_slots(current_scheduler.get_current_dates(), current_scheduler.rooms_df)
             logging.info(f'Дата {custom_date} добавлена')
             return jsonify({
                 'status': 'success',
@@ -385,6 +387,7 @@ def manage_dates():
 
         elif action == 'restore':
             current_scheduler.restore_default_dates()
+            update_classroom_slots(current_scheduler.get_current_dates(), current_scheduler.rooms_df)
             logging.info('Исходные даты восстановлены')
             return jsonify({
                 'status': 'success',
@@ -1544,6 +1547,58 @@ def update_room_requirement():
         return jsonify({
             'status': 'error',
             'message': f'Ошибка при обновлении требований к аудиториям: {str(e)}'
+        }), 500
+    finally:
+        session.close()
+
+
+@app.route('/api/update_classroom_type', methods=['POST'])
+@jwt_required()
+def update_classroom_type():
+    global current_scheduler
+    claims = get_jwt()
+    user_role = claims.get('role')
+    session = Session(bind=engine)
+    try:
+        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        if active_draft and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
+            logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
+        if not current_scheduler:
+            return jsonify({
+                'status': 'error',
+                'message': 'Планировщик не инициализирован'
+            }), 400
+
+        data = request.json
+        if not data or 'exams' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Не предоставлены данные об экзаменах'
+            }), 400
+
+        for exam in data['exams']:
+            section_id = exam.get('section_id')
+            classroom_type = exam.get('classroom_type', 'regular')
+            logging.info(f"Обновлен тип аудитории для {section_id}: classroom_type={classroom_type}")
+            current_scheduler.update_classroom_type(section_id, classroom_type)
+
+        # Update the draft with the latest exam_groups
+        active_draft.exams_data = current_scheduler.exam_groups.to_json(orient='records')
+        session.commit()
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Типы аудиторий успешно обновлены'
+        }), 200
+
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Ошибка при обновлении типов аудиторий: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Ошибка при обновлении типов аудиторий: {str(e)}'
         }), 500
     finally:
         session.close()
