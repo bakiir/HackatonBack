@@ -194,7 +194,7 @@ def update_classroom_slots(dates, rooms_df, time_step=30, work_start_hour=8, wor
             if current_slot_end > end_time:
                 break
             
-            for room in rooms_df['Аудитория']:
+            for room in rooms_df['Аудитория'].unique():
                 slot = ClassroomSlot(
                     classroom_number=str(room),
                     start_time=current_slot_start,

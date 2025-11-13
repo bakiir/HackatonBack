@@ -255,67 +255,97 @@ def book_slot():
     session = Session()
     try:
         data = request.json
-        date_str = data.get('date')
-        start_time_str = data.get('start_time')
-        duration_minutes = data.get('duration')
-        classroom_number = data.get('classroom_number')
-        subject = data.get('subject')
-        sections = data.get('sections')
+        bookings = data if isinstance(data, list) else [data]
+        results = []
 
-        # 1. Валидация входных данных
-        if not all([date_str, start_time_str, duration_minutes, classroom_number, subject, sections]):
-            return jsonify({'error': 'Missing required parameters'}), 400
-        
-        if not isinstance(sections, list):
-            return jsonify({'error': '"sections" must be a list'}), 400
+        for booking_data in bookings:
+            date_str = booking_data.get('date')
+            start_time_str = booking_data.get('start_time')
+            duration_minutes = booking_data.get('duration')
 
-        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        start_time = datetime.strptime(start_time_str, '%H:%M').time()
-        
-        booking_start_dt = datetime.combine(target_date, start_time)
-        booking_end_dt = booking_start_dt + timedelta(minutes=duration_minutes)
+            classroom_number = booking_data.get('classroom_number')
+            subject = booking_data.get('subject')
+            sections = booking_data.get('sections')
 
-        # 2. Поиск всех слотов, которые нужно забронировать
-        slots_to_book = session.query(ClassroomSlot).filter(
-            ClassroomSlot.classroom_number == classroom_number,
-            ClassroomSlot.start_time >= booking_start_dt,
-            ClassroomSlot.start_time < booking_end_dt
-        ).all()
+            # 1. Валидация входных данных
+            if not all([date_str, start_time_str, duration_minutes, classroom_number, subject, sections]):
+                results.append({'error': 'Missing required parameters'})
+                continue
 
-        # 3. Проверка, что все слоты существуют и свободны
-        if not slots_to_book:
-            return jsonify({'error': 'No slots found for the specified time range.'}), 404
+            if not isinstance(sections, list):
+                results.append({'error': '"sections" must be a list'})
+                continue
 
-        required_slots_count = math.ceil(duration_minutes / 30)
-        if len(slots_to_book) != required_slots_count:
-            return jsonify({'error': 'The requested duration does not align with the available slot boundaries.'}), 400
+            try:
+                target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                start_time = datetime.strptime(start_time_str, '%H:%M').time()
 
-        for slot in slots_to_book:
-            if slot.is_booked:
-                return jsonify({'error': f'Slot starting at {slot.start_time.strftime("%H:%M")} is already booked.'}), 409
+                booking_start_dt = datetime.combine(target_date, start_time)
+                booking_end_dt = booking_start_dt + timedelta(minutes=duration_minutes)
+            except ValueError as ve:
+                results.append({'error': f'Invalid date or time format: {ve}'})
+                continue
 
-        # 4. Бронирование слотов
-        booking_info = json.dumps({
-            "subject": subject,
-            "sections": sections
-        }, ensure_ascii=False)
+            # 2. Поиск всех слотов, которые нужно забронировать
+            slots_to_book = session.query(ClassroomSlot).filter(
+                ClassroomSlot.classroom_number == classroom_number,
+                ClassroomSlot.start_time >= booking_start_dt,
+                ClassroomSlot.start_time < booking_end_dt
+            ).all()
 
-        for slot in slots_to_book:
-            slot.is_booked = True
-            slot.booked_groups_info = booking_info
-        
-        session.commit()
+            # 3. Проверка, что все слоты существуют и свободны
+            if not slots_to_book:
+                results.append({'error': f'No slots found for the specified time range:{sections}'})
+                continue
 
-        logging.info(f"Slots from {start_time_str} for {duration_minutes} mins in classroom {classroom_number} manually booked for subject '{subject}'.")
-        
-        return jsonify({
-            'status': 'success',
-            'message': f'Slots from {start_time_str} to {booking_end_dt.strftime("%H:%M")} successfully booked.'
-        }), 200
+            required_slots_count = math.ceil(duration_minutes / 30)
+            if len(slots_to_book) != required_slots_count:
+                error_message = (
+                    f'The requested duration does not align with the available slot boundaries. '
+                    f'Required slots: {required_slots_count}, Found slots: {len(slots_to_book)} '
+                    f'for sections: {sections}.'
+                )
+                results.append({'error': error_message})
+                continue
 
-    except ValueError as e:
-        session.rollback()
-        return jsonify({'error': f'Invalid data format: {e}'}), 400
+            conflict = False
+            for slot in slots_to_book:
+                if slot.is_booked:
+                    results.append(
+                        {'error': f'Slot starting at {slot.start_time.strftime("%H:%M")} is already booked.for {sections}'})
+                    conflict = True
+                    break
+
+            if conflict:
+                continue
+
+            # 4. Бронирование слотов
+            booking_info = json.dumps({
+                "subject": subject,
+                "sections": sections
+            }, ensure_ascii=False)
+
+            for slot in slots_to_book:
+                slot.is_booked = True
+                slot.booked_groups_info = booking_info
+
+            end_time_str = booking_end_dt.strftime("%H:%M")
+            results.append({
+                'status': 'success',
+                'message': f'Slots from {start_time_str} to {end_time_str} in classroom {classroom_number} successfully booked.'
+            })
+
+            logging.info(
+                f"Slots from {start_time_str} for {duration_minutes} mins in classroom {classroom_number} manually booked for subject '{subject}'.")
+
+        has_error = any('error' in res for res in results)
+        if has_error:
+            session.rollback()
+            return jsonify({'results': results}), 400
+        else:
+            session.commit()
+            return jsonify({'results': results}), 200
+
     except Exception as e:
         session.rollback()
         logging.error(f"Error booking slot: {traceback.format_exc()}")
