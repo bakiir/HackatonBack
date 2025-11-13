@@ -94,8 +94,10 @@ current_scheduler = None
 from create_db import ExamSession, engine, ExamSessionDraft, AdminStatusDraft, ClassroomSlot, update_classroom_slots
 
 
-@app.route('/api/classroom/free-slots', methods=['GET'])
-def get_free_classroom_slots():
+# DEPRECATED: This endpoint is deprecated and will be removed in a future version.
+# Use /api/free-slots instead.
+@app.route('/api/classroom/free-slots-old', methods=['GET'])
+def get_free_classroom_slots_old():
     session = Session()
     try:
         classroom_number = request.args.get('classroom_number')
@@ -110,9 +112,72 @@ def get_free_classroom_slots():
     finally:
         session.close()
 
-@app.route('/api/slots/book', methods=['POST'])
+@app.route('/api/free-slots', methods=['GET'])
+def get_free_slots():
+    session = Session()
+    try:
+        # 1. Получение параметров
+        date_str = request.args.get('date')
+        duration_minutes = request.args.get('duration', type=int)
+        classroom_number = request.args.get('classroom_number')
+
+        if not all([date_str, duration_minutes, classroom_number]):
+            return jsonify({'error': 'Missing required parameters: date, duration, classroom_number'}), 400
+
+        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+
+        # 2. Определение временных рамок
+        work_start_hour=8
+        work_end_hour=19
+        work_end_minute=30
+        time_step=30
+        
+        day_start = datetime.combine(target_date, datetime.min.time()).replace(hour=work_start_hour)
+        day_end = datetime.combine(target_date, datetime.min.time()).replace(hour=work_end_hour, minute=work_end_minute)
+        
+        total_duration_minutes = (day_end - day_start).total_seconds() / 60
+        num_blocks_in_day = int(total_duration_minutes / time_step)
+
+        # 3. Построение сетки доступности
+        availability_grid = [False] * num_blocks_in_day
+
+        booked_slots = session.query(ClassroomSlot).filter(
+            ClassroomSlot.classroom_number == classroom_number,
+            ClassroomSlot.start_time >= day_start,
+            ClassroomSlot.end_time <= day_end,
+            ClassroomSlot.is_booked == True
+        ).all()
+
+        for slot in booked_slots:
+            start_block = int(((slot.start_time - day_start).total_seconds() / 60) / time_step)
+            end_block = int(((slot.end_time - day_start).total_seconds() / 60) / time_step)
+            for i in range(start_block, end_block):
+                if i < num_blocks_in_day:
+                    availability_grid[i] = True
+
+        # 4. Поиск свободных непрерывных слотов
+        slots_needed = math.ceil(duration_minutes / time_step)
+        available_start_times = []
+
+        for start_block in range(num_blocks_in_day - slots_needed + 1):
+            if not any(availability_grid[start_block : start_block + slots_needed]):
+                slot_time = day_start + timedelta(minutes=start_block * time_step)
+                available_start_times.append(slot_time.strftime('%H:%M'))
+
+        return jsonify(available_start_times), 200
+
+    except ValueError:
+        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD.'}), 400
+    except Exception as e:
+        logging.error(f"Error getting free slots: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
+
+@app.route('/api/slots/book-old', methods=['POST'])
 # @admin_required("admin")  # Temporarily commented out
-def book_classroom_slot():
+def book_classroom_slot_old():
     session = Session()
     try:
         data = request.json
@@ -184,6 +249,80 @@ def book_classroom_slot():
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()
+
+@app.route('/api/book-slot', methods=['POST'])
+def book_slot():
+    session = Session()
+    try:
+        data = request.json
+        date_str = data.get('date')
+        start_time_str = data.get('start_time')
+        duration_minutes = data.get('duration')
+        classroom_number = data.get('classroom_number')
+        subject = data.get('subject')
+        sections = data.get('sections')
+
+        # 1. Валидация входных данных
+        if not all([date_str, start_time_str, duration_minutes, classroom_number, subject, sections]):
+            return jsonify({'error': 'Missing required parameters'}), 400
+        
+        if not isinstance(sections, list):
+            return jsonify({'error': '"sections" must be a list'}), 400
+
+        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        start_time = datetime.strptime(start_time_str, '%H:%M').time()
+        
+        booking_start_dt = datetime.combine(target_date, start_time)
+        booking_end_dt = booking_start_dt + timedelta(minutes=duration_minutes)
+
+        # 2. Поиск всех слотов, которые нужно забронировать
+        slots_to_book = session.query(ClassroomSlot).filter(
+            ClassroomSlot.classroom_number == classroom_number,
+            ClassroomSlot.start_time >= booking_start_dt,
+            ClassroomSlot.start_time < booking_end_dt
+        ).all()
+
+        # 3. Проверка, что все слоты существуют и свободны
+        if not slots_to_book:
+            return jsonify({'error': 'No slots found for the specified time range.'}), 404
+
+        required_slots_count = math.ceil(duration_minutes / 30)
+        if len(slots_to_book) != required_slots_count:
+            return jsonify({'error': 'The requested duration does not align with the available slot boundaries.'}), 400
+
+        for slot in slots_to_book:
+            if slot.is_booked:
+                return jsonify({'error': f'Slot starting at {slot.start_time.strftime("%H:%M")} is already booked.'}), 409
+
+        # 4. Бронирование слотов
+        booking_info = json.dumps({
+            "subject": subject,
+            "sections": sections
+        }, ensure_ascii=False)
+
+        for slot in slots_to_book:
+            slot.is_booked = True
+            slot.booked_groups_info = booking_info
+        
+        session.commit()
+
+        logging.info(f"Slots from {start_time_str} for {duration_minutes} mins in classroom {classroom_number} manually booked for subject '{subject}'.")
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Slots from {start_time_str} to {booking_end_dt.strftime("%H:%M")} successfully booked.'
+        }), 200
+
+    except ValueError as e:
+        session.rollback()
+        return jsonify({'error': f'Invalid data format: {e}'}), 400
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Error booking slot: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
 @app.route('/api/proctors/assign', methods=['POST'])
 @admin_required("admin")
 def assign_proctors():
