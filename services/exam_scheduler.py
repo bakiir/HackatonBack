@@ -138,7 +138,7 @@ class ExamScheduler:
                 self.schedule_df = pd.read_json(StringIO(session_data.schedule_data))
                 if 'Date' in self.schedule_df.columns:
                     self.schedule_df['Date'] = pd.to_datetime(
-                        self.schedule_df['Date']).dt.date  # Нормализуем дату к date (без времени)
+                        self.schedule_df['Date'], errors='coerce').dt.date  # Нормализуем дату к date (без времени)
                 if 'Time_Slot' in self.schedule_df.columns:
                     self.schedule_df['Time_Slot'] = self.schedule_df['Time_Slot'].str.strip()  # Убираем пробелы
                 logging.info(f"Загружено расписание: {len(self.schedule_df)} записей")
@@ -1875,6 +1875,10 @@ class ExamScheduler:
 
         for _, exam in self.schedule_df.iterrows():
             try:
+                if exam['Date'] == 'N/A' or pd.isna(exam['Date']):
+                    logging.warning(f"Skipping seat assignment for section {exam.get('Section', 'unknown')} because Date is 'N/A' or empty.")
+                    continue
+                
                 required_fields = ['Date', 'Time_Slot', 'Subject', 'Section', 'Room', 'Instructor']
                 if not all(field in exam and pd.notna(exam[field]) for field in required_fields):
                     problem_sections.append(exam.get('Section', 'unknown'))
