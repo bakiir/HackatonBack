@@ -1884,6 +1884,91 @@ def upload_students():
         session.close()
 
 
+def group_consecutive_slots(slots):
+    if not slots:
+        return []
+
+    # Define the key for grouping exams that are the same event
+    def get_exam_key(slot):
+        return (
+            slot.get('Date'),
+            slot.get('Subject'),
+            slot.get('Instructor'),
+            slot.get('Room'),
+            slot.get('EduProgram'),
+            slot.get('Section'),
+            # Do not group by duration, as it's the same for all small slots
+            # slot.get('Duration'), 
+            slot.get('Students_Count'),
+            slot.get('pinned'),
+            slot.get('two_rooms_needed')
+        )
+
+    # Sort slots by the grouping key and then by time
+    try:
+        slots.sort(key=lambda s: (get_exam_key(s), datetime.strptime(s.get('Time_Slot', '00:00-00:00').split('-')[0], '%H:%M')))
+    except (ValueError, IndexError):
+        # If time format is unexpected, fall back to string sort for time
+        slots.sort(key=lambda s: (get_exam_key(s), s.get('Time_Slot', '')))
+
+
+    merged_slots = []
+    i = 0
+    while i < len(slots):
+        # Start of a potential group
+        group = [slots[i]]
+        j = i + 1
+        while j < len(slots):
+            # Check if the next slot is part of the same exam event
+            if get_exam_key(slots[j]) == get_exam_key(slots[i]):
+                try:
+                    # Check if the time slots are consecutive
+                    prev_end_time_str = group[-1]['Time_Slot'].split('-')[1]
+                    curr_start_time_str = slots[j]['Time_Slot'].split('-')[0]
+                    
+                    prev_end_time = datetime.strptime(prev_end_time_str, '%H:%M')
+                    curr_start_time = datetime.strptime(curr_start_time_str, '%H:%M')
+
+                    # If they are consecutive
+                    if prev_end_time == curr_start_time:
+                        group.append(slots[j])
+                        j += 1
+                    else:
+                        # Time is not consecutive, so break the group
+                        break
+                except (ValueError, IndexError):
+                    # Time format is wrong, break the group
+                    break
+            else:
+                # Different exam, break the group
+                break
+        
+        # If the group has more than one slot, merge them
+        if len(group) > 1:
+            first_slot = group[0]
+            last_slot = group[-1]
+            
+            start_time = first_slot['Time_Slot'].split('-')[0]
+            end_time = last_slot['Time_Slot'].split('-')[1]
+            
+            merged_slot = first_slot.copy()
+            merged_slot['Time_Slot'] = f"{start_time}-{end_time}"
+            
+            # Per user request, use the last slot's Base_Time_Slot and seat_info
+            merged_slot['Base_Time_Slot'] = last_slot['Base_Time_Slot']
+            merged_slot['seat_info'] = last_slot.get('seat_info') # Use .get for safety
+            
+            merged_slots.append(merged_slot)
+        else:
+            # Single slot, just add it
+            merged_slots.append(group[0])
+            
+        # Move index to the next un-processed slot
+        i = j
+
+    return merged_slots
+
+
 @app.route('/schedule/student/<string:student_id>')
 def get_student_schedule(student_id):
     try:
@@ -1954,8 +2039,9 @@ def get_student_schedule(student_id):
                     'room': 'Ошибка',
                     'proctor': 'Ошибка обработки'
                 }
-
-        return jsonify(result)
+        
+        grouped_result = group_consecutive_slots(result)
+        return jsonify(grouped_result)
 
     except Exception as e:
         logging.error(f"Ошибка при получении расписания: {traceback.format_exc()}")

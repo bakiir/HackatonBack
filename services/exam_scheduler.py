@@ -1087,12 +1087,20 @@ class ExamScheduler:
             # Добавление экзаменов без флага 'has_exam'
             if not no_exam_groups.empty and self.custom_dates:
                 for _, group in no_exam_groups.iterrows():
+                    random_date = random.choice(self.custom_dates).strftime('%Y-%m-%d')
                     self.schedule.append({
-                        'Date': 'N/A', 'Subject': group['Subject'], 'Instructor': group['Instructor'],
-                        'EduProgram': group['EduProgram'], 'Section': group['Section'],
+                        'Date': random_date, 
+                        'Subject': group['Subject'], 
+                        'Instructor': group['Instructor'],
+                        'EduProgram': group['EduProgram'], 
+                        'Section': group['Section'],
                         'Students_Count': len(self.exams_df[self.exams_df['Section'] == group['Section']]),
-                        'Room': 'N/A', 'Time_Slot': 'N/A', 'Duration': 0, 'proctor_needed': False,
-                        'two_rooms_needed': False, 'pinned': True
+                        'Room': 'N/A', 
+                        'Time_Slot': 'N/A', 
+                        'Duration': 0, 
+                        'proctor_needed': False,
+                        'two_rooms_needed': False, 
+                        'pinned': True
                     })
                     success_count += 1
 
