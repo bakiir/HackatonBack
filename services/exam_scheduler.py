@@ -16,6 +16,93 @@ from io import StringIO
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
+def group_consecutive_slots(slots):
+    if not slots:
+        return []
+
+    # Define the key for grouping exams that are the same event
+    def get_exam_key(slot):
+        return (
+            str(slot.get('Date')),
+            slot.get('Subject'),
+            slot.get('Instructor'),
+            slot.get('Room'),
+            slot.get('EduProgram'),
+            slot.get('Section'),
+            # Do not group by duration, as it's the same for all small slots
+            # slot.get('Duration'), 
+            slot.get('Students_Count'),
+            slot.get('pinned'),
+            slot.get('two_rooms_needed')
+        )
+
+    # Sort slots by the grouping key and then by time
+    try:
+        slots.sort(key=lambda s: (get_exam_key(s), datetime.strptime(s.get('Time_Slot', '00:00-00:00').split('-')[0], '%H:%M')))
+    except (ValueError, IndexError):
+        # If time format is unexpected, fall back to string sort for time
+        slots.sort(key=lambda s: (get_exam_key(s), s.get('Time_Slot', '')))
+
+
+    merged_slots = []
+    i = 0
+    while i < len(slots):
+        # Start of a potential group
+        group = [slots[i]]
+        j = i + 1
+        while j < len(slots):
+            # Check if the next slot is part of the same exam event
+            if get_exam_key(slots[j]) == get_exam_key(slots[i]):
+                try:
+                    # Check if the time slots are consecutive
+                    prev_end_time_str = group[-1]['Time_Slot'].split('-')[1]
+                    curr_start_time_str = slots[j]['Time_Slot'].split('-')[0]
+                    
+                    prev_end_time = datetime.strptime(prev_end_time_str, '%H:%M')
+                    curr_start_time = datetime.strptime(curr_start_time_str, '%H:%M')
+
+                    # If they are consecutive
+                    if prev_end_time == curr_start_time:
+                        group.append(slots[j])
+                        j += 1
+                    else:
+                        # Time is not consecutive, so break the group
+                        break
+                except (ValueError, IndexError):
+                    # Time format is wrong, break the group
+                    break
+            else:
+                # Different exam, break the group
+                break
+        
+        # If the group has more than one slot, merge them
+        if len(group) > 1:
+            first_slot = group[0]
+            last_slot = group[-1]
+            
+            start_time = first_slot['Time_Slot'].split('-')[0]
+            end_time = last_slot['Time_Slot'].split('-')[1]
+            
+            merged_slot = first_slot.copy()
+            merged_slot['Time_Slot'] = f"{start_time}-{end_time}"
+            
+            # Per user request, use the last slot's Base_Time_Slot and seat_info
+            if 'Base_Time_Slot' in last_slot:
+                merged_slot['Base_Time_Slot'] = last_slot['Base_Time_Slot']
+            if 'seat_info' in last_slot:
+                merged_slot['seat_info'] = last_slot.get('seat_info') # Use .get for safety
+            
+            merged_slots.append(merged_slot)
+        else:
+            # Single slot, just add it
+            merged_slots.append(group[0])
+            
+        # Move index to the next un-processed slot
+        i = j
+
+    return merged_slots
+
+
 class ExamScheduler:
     def __init__(
             self,
@@ -1409,10 +1496,25 @@ class ExamScheduler:
 
     def export_schedule(self, output_excel):
         """Экспорт расписания с учетом разделенных потоков"""
-        if self.schedule_df is None:
-            self.schedule_df = pd.DataFrame(self.schedule)
+        if self.schedule_df is None or self.schedule_df.empty:
+            if self.schedule:
+                self.schedule_df = pd.DataFrame(self.schedule)
+            else:
+                logging.warning("Нет данных для экспорта в Excel.")
+                # Создаем пустой файл, чтобы избежать ошибки
+                pd.DataFrame().to_excel(output_excel, index=False)
+                return
 
-        self.schedule_df.to_excel(output_excel, index=False)
+        # Group consecutive slots before exporting
+        schedule_records = self.schedule_df.to_dict('records')
+        grouped_records = group_consecutive_slots(schedule_records)
+        grouped_df = pd.DataFrame(grouped_records)
+
+        # Drop seat_info if it exists, as it's a dict and causes issues with Excel export
+        if 'seat_info' in grouped_df.columns:
+            grouped_df = grouped_df.drop(columns=['seat_info'])
+
+        grouped_df.to_excel(output_excel, index=False)
 
     def export_html_schedule(self, output_html):
         logging.info("Экспорт общего расписания в файл HTML.")
@@ -1456,12 +1558,23 @@ class ExamScheduler:
             print("-" * 50)
 
     def export_student_schedule_to_excel(self, student_id, output_file):
-        student_schedule = self.get_student_sections(student_id)
-        if student_schedule.empty:
+        student_schedule_df = self.get_student_sections(student_id)
+        if student_schedule_df.empty:
             logging.warning(f"Для студента {student_id} не найдено расписания.")
+            # Create an empty excel file to avoid errors
+            pd.DataFrame().to_excel(output_file, index=False)
             return
 
-        student_schedule.to_excel(output_file, index=False)
+        # Group consecutive slots
+        schedule_records = student_schedule_df.to_dict('records')
+        grouped_records = group_consecutive_slots(schedule_records)
+        grouped_df = pd.DataFrame(grouped_records)
+
+        # Drop seat_info if it exists
+        if 'seat_info' in grouped_df.columns:
+            grouped_df = grouped_df.drop(columns=['seat_info'])
+
+        grouped_df.to_excel(output_file, index=False)
         logging.info(f"Расписание для студента {student_id} сохранено в файл {output_file}.")
 
     def get_section_info(self, section_id):

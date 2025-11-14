@@ -1892,7 +1892,7 @@ def group_consecutive_slots(slots):
     # Define the key for grouping exams that are the same event
     def get_exam_key(slot):
         return (
-            slot.get('Date'),
+            str(slot.get('Date')),
             slot.get('Subject'),
             slot.get('Instructor'),
             slot.get('Room'),
