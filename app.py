@@ -1002,7 +1002,8 @@ def get_schedule():
         return jsonify({'error': 'Расписание не сгенерировано'}), 400
 
     schedule_data = current_scheduler.schedule_df.replace({np.nan: None}).to_dict('records')
-    return jsonify(schedule_data)
+    grouped_schedule = group_consecutive_slots(schedule_data)
+    return jsonify(grouped_schedule)
 
 
 
