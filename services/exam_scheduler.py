@@ -117,7 +117,7 @@ class ExamScheduler:
             time_step=30,  # Шаг временных слотов в минутах
             work_day_start="08:00",  # Начало рабочего дня
             work_day_end="19:30",  # Конец рабочего дня
-            buffer_time=60  # Буферное время после каждого экзамена в минутах
+            buffer_time=30  # Буферное время после каждого экзамена в минутах
     ):
         logging.info("Инициализация планировщика экзаменов.")
         self.schedule_data = schedule_data
@@ -989,229 +989,241 @@ class ExamScheduler:
         finally:
             session.close()
 
+    def _find_suitable_rooms(self, available_rooms, num_students, two_rooms_needed):
+        """Finds suitable rooms for a given exam group."""
+        final_room_str = None
+        rooms_to_book = []
+        if not two_rooms_needed:
+            room_107 = '107'
+            if room_107 in available_rooms and self.room_capacities.get(room_107, 0) >= num_students:
+                final_room_str = room_107
+                rooms_to_book.append(final_room_str)
+            else:
+                suitable_rooms = [r for r in available_rooms if self.room_capacities.get(r, 0) >= num_students and r != room_107]
+                if suitable_rooms:
+                    final_room_str = min(suitable_rooms, key=lambda r: self.room_capacities.get(r, 0))
+                    rooms_to_book.append(final_room_str)
+        else:
+            room_pairs = list(combinations(available_rooms, 2))
+            suitable_pairs = [
+                pair for pair in room_pairs
+                if self.room_capacities.get(str(pair[0]), 0) + self.room_capacities.get(str(pair[1]), 0) >= num_students
+            ]
+            if suitable_pairs:
+                best_pair = min(suitable_pairs, key=lambda p: self.room_capacities.get(str(p[0]), 0) + self.room_capacities.get(str(p[1]), 0))
+                final_room_str = f"{best_pair[0]},{best_pair[1]}"
+                rooms_to_book.extend(best_pair)
+        return final_room_str, rooms_to_book
+
+    def _book_slot(self, day_str, start_block, total_blocks_needed, rooms_to_book, num_blocks_in_day):
+        """Marks the given rooms as booked in the availability grid."""
+        for room in rooms_to_book:
+            for i in range(start_block, start_block + total_blocks_needed):
+                if i < num_blocks_in_day:
+                    self.room_availability_grid[day_str][str(room)][i] = True
+
+    def _create_exam_record(self, group, day_str, time_slot_str, room_str, num_students):
+        """Creates a dictionary representing a single scheduled exam."""
+        return {
+            'Date': day_str,
+            'Subject': group['Subject'],
+            'Instructor': group['Instructor'],
+            'EduProgram': group['EduProgram'],
+            'Section': group['Section'],
+            'Students_Count': num_students,
+            'Room': room_str,
+            'Time_Slot': time_slot_str,
+            'Duration': int(group.get('Duration', 180)),
+            'proctor_needed': group.get('proctor_needed', False),
+            'two_rooms_needed': group.get('two_rooms_needed', False),
+            'pinned': False
+        }
+
     def create_schedule(self):
-        logging.info("Начало создания расписания по новой гибкой логике.")
+        logging.info("Начало создания расписания (2-х проходная стратегия).")
         self.schedule = []
         self.student_exams = defaultdict(list)
-        success_count = 0
         self.failed_sections = []
 
         try:
-            # 1. Параметры новой логики
+            # 1. Initialize grid and load manual bookings
             time_step_minutes = self.time_step
             buffer_minutes = self.buffer_time
             work_day_start_dt = self.work_day_start
-
             total_duration_minutes = (self.work_day_end - self.work_day_start).total_seconds() / 60
             num_blocks_in_day = int(total_duration_minutes / time_step_minutes)
-            logging.info(
-                f"Рабочий день с {self.work_day_start.strftime('%H:%M')} до {self.work_day_end.strftime('%H:%M')}, "
-                f"{num_blocks_in_day} блоков по {time_step_minutes} минут."
-            )
-
-            # 2. Инициализация сетки доступности
             self.room_availability_grid = {
-                day.strftime('%Y-%m-%d'): {
-                    str(room): [False] * num_blocks_in_day for room in self.rooms
-                }
+                day.strftime('%Y-%m-%d'): {str(room): [False] * num_blocks_in_day for room in self.rooms}
                 for day in self.custom_dates
             }
-
-            # 3. Загрузка ручных бронирований и обновление сетки
             manual_exams, scheduled_sections = self._load_manual_bookings()
             self.schedule.extend(manual_exams)
-            success_count += len(manual_exams)
             for exam in manual_exams:
-                day_str = exam['Date']
-                room = str(exam['Room'])
-                if day_str not in self.room_availability_grid or room not in self.room_availability_grid[day_str]:
-                    continue
-
-                start_h, start_m = map(int, exam['Time_Slot'].split('-')[0].split(':'))
-                end_h, end_m = map(int, exam['Time_Slot'].split('-')[1].split(':'))
+                day_str, room, time_slot = exam['Date'], str(exam['Room']), exam['Time_Slot']
+                if day_str not in self.room_availability_grid or room not in self.room_availability_grid.get(day_str, {}): continue
+                start_h, start_m = map(int, time_slot.split('-')[0].split(':'))
+                end_h, end_m = map(int, time_slot.split('-')[1].split(':'))
                 start_dt = self.work_day_start.replace(hour=start_h, minute=start_m)
                 end_dt = self.work_day_start.replace(hour=end_h, minute=end_m)
-
                 start_block = int((start_dt - self.work_day_start).total_seconds() / 60 / time_step_minutes)
                 end_block = int((end_dt - self.work_day_start).total_seconds() / 60 / time_step_minutes)
-
-                for i in range(start_block, end_block):
-                    if i < num_blocks_in_day:
-                        self.room_availability_grid[day_str][room][i] = True
-                
-                # Обновляем расписание студентов
+                self._book_slot(day_str, start_block, end_block - start_block, [room], num_blocks_in_day)
                 students = self.exams_df[self.exams_df['Section'] == exam['Section']]['fake_id'].tolist()
-                for student_id in students:
-                    self.student_exams[student_id].append(exam)
+                for student_id in students: self.student_exams[student_id].append(exam)
 
-
-            # 4. Подготовка данных для планирования
-            if not hasattr(self, 'exam_groups') or self.exam_groups.empty:
-                raise ValueError("Нет данных о группах экзаменов")
-
-            groups_to_schedule = self.exam_groups[
-                (self.exam_groups['has_exam'] == True) &
-                (~self.exam_groups['Section'].isin(scheduled_sections))
-                ].copy()
-
+            # 2. Prepare groups for scheduling
+            groups_to_schedule = self.exam_groups[(self.exam_groups['has_exam'] == True) & (~self.exam_groups['Section'].isin(scheduled_sections))].copy()
             no_exam_groups = self.exam_groups[self.exam_groups['has_exam'] == False].copy()
 
-            if groups_to_schedule.empty:
-                logging.warning("Нет экзаменов для дальнейшего планирования.")
-            else:
-                # Сортировка групп (самые сложные сначала)
+            if not groups_to_schedule.empty:
+                # --- Start of new logic ---
+                logging.info("Вычисление 'коэффициента сложности' для каждой секции...")
+
+                # 1. Кэшируем количество секций для каждого студента для производительности
+                student_section_counts = self.exams_df['fake_id'].value_counts().to_dict()
+
+                # 2. Функция для вычисления 'занятости' студентов
+                def get_student_busyness(section_id):
+                    student_ids = self.exams_df[self.exams_df['Section'] == section_id]['fake_id']
+                    if student_ids.empty:
+                        return 0
+                    # Суммируем общее количество секций для всех студентов в данной секции
+                    total_sections_for_students = sum(student_section_counts.get(sid, 0) for sid in student_ids)
+                    return total_sections_for_students / len(student_ids) # Возвращаем среднее
+
+                # 3. Вычисляем все компоненты 'коэффициента сложности'
                 groups_to_schedule['student_count'] = groups_to_schedule['Section'].map(
                     lambda x: len(self.exams_df[self.exams_df['Section'] == x])
                 )
-                groups_to_schedule = groups_to_schedule.sort_values(by=['student_count'], ascending=False)
+                groups_to_schedule['student_busyness'] = groups_to_schedule['Section'].apply(get_student_busyness)
+                
+                # Веса для каждого фактора. Можно будет настраивать.
+                w_students = 1.0
+                w_busyness = 0.5
+                w_two_rooms = 100 # Большой штраф за требование двух комнат
 
-                # 5. Основной цикл планирования
+                groups_to_schedule['constraint_score'] = (
+                    w_students * groups_to_schedule['student_count'] +
+                    w_busyness * groups_to_schedule['student_busyness'] +
+                    w_two_rooms * groups_to_schedule['two_rooms_needed'].astype(int)
+                )
+                
+                # Сортируем по новому коэффициенту
+                groups_to_schedule = groups_to_schedule.sort_values(by=['constraint_score'], ascending=False)
+                
+                logging.info("Топ-5 самых сложных секций по новому коэффициенту:")
+                logging.info(groups_to_schedule[['Section', 'student_count', 'student_busyness', 'two_rooms_needed', 'constraint_score']].head())
+                # --- End of new logic ---
+
+                # 3. PASS 1: Strict scheduling
+                logging.info(f"--- Проход 1: Строгое планирование для {len(groups_to_schedule)} секций ---")
+                failed_pass_1 = []
                 for _, group in groups_to_schedule.iterrows():
                     section = group['Section']
                     students = self.exams_df[self.exams_df['Section'] == section]['fake_id'].tolist()
                     num_students = len(students)
-                    duration_minutes = int(group.get('Duration', 180))
-                    instructor = group['Instructor']
-                    two_rooms_needed = group.get('two_rooms_needed', False)
-                    
+                    duration_minutes, instructor, two_rooms_needed = int(group.get('Duration', 180)), group['Instructor'], group.get('two_rooms_needed', False)
                     exam_blocks = math.ceil(duration_minutes / time_step_minutes)
                     buffer_blocks = math.ceil(buffer_minutes / time_step_minutes)
                     total_blocks_needed = exam_blocks + buffer_blocks
-
                     found_slot = False
                     for day in self.custom_dates:
                         day_str = day.strftime('%Y-%m-%d')
+                        if any(e['Date'] == day_str for s_id in students for e in self.student_exams[s_id]): continue
                         for start_block in range(num_blocks_in_day - total_blocks_needed + 1):
-                            end_block_with_buffer = start_block + total_blocks_needed
+                            exam_time_slot_str = f"{(work_day_start_dt + timedelta(minutes=start_block * time_step_minutes)).strftime('%H:%M')}-{(work_day_start_dt + timedelta(minutes=(start_block + exam_blocks) * time_step_minutes)).strftime('%H:%M')}"
+                            if not self._is_instructor_available(instructor, day, exam_time_slot_str): continue
                             
-                            exam_start_time = work_day_start_dt + timedelta(minutes=start_block * time_step_minutes)
-                            exam_end_time = exam_start_time + timedelta(minutes=exam_blocks * time_step_minutes)
-                            exam_time_slot_str = f"{exam_start_time.strftime('%H:%M')}-{exam_end_time.strftime('%H:%M')}"
-
-                            student_conflict = False
-                            for student_id in students:
-                                for existing_exam in self.student_exams[student_id]:
-                                    if existing_exam['Date'] == day_str:
-                                        student_conflict = True
-                                        break
-                                if student_conflict:
-                                    break
-                            if student_conflict:
-                                continue
-
-                            if not self._is_instructor_available(instructor, day, exam_time_slot_str):
-                                continue
-
-                            available_rooms = [
-                                room for room in self.rooms
-                                if not any(self.room_availability_grid[day_str][room][i] for i in range(start_block, end_block_with_buffer))
-                            ]
-
-                            final_room_str = None
-                            rooms_to_book = []
-                            if not two_rooms_needed:
-                                # --- START of custom logic for room 107 ---
-                                room_107 = '107'
-                                # Проверяем, доступна ли аудитория 107 и подходит ли по вместимости
-                                if room_107 in available_rooms and self.room_capacities.get(room_107, 0) >= num_students:
-                                    final_room_str = room_107
-                                    rooms_to_book.append(final_room_str)
-                                else:
-                                    # Если 107 не подходит, используем старую логику для остальных аудиторий
-                                    suitable_rooms = [r for r in available_rooms if self.room_capacities.get(r, 0) >= num_students and r != room_107]
-                                    if suitable_rooms:
-                                        final_room_str = min(suitable_rooms, key=lambda r: self.room_capacities.get(r, 0))
-                                        rooms_to_book.append(final_room_str)
-                                # --- END of custom logic for room 107 ---
-                            else:
-                                room_pairs = list(combinations(available_rooms, 2))
-                                suitable_pairs = [
-                                    pair for pair in room_pairs
-                                    if self.room_capacities.get(pair[0], 0) + self.room_capacities.get(pair[1], 0) >= num_students
-                                ]
-                                if suitable_pairs:
-                                    best_pair = min(suitable_pairs, key=lambda p: self.room_capacities.get(p[0], 0) + self.room_capacities.get(p[1], 0))
-                                    final_room_str = f"{best_pair[0]},{best_pair[1]}"
-                                    rooms_to_book.extend(best_pair)
+                            available_rooms = [r for r in self.rooms if r in self.room_availability_grid[day_str] and not any(self.room_availability_grid[day_str][r][i] for i in range(start_block, start_block + total_blocks_needed))]
+                            final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed)
 
                             if final_room_str:
-                                for room in rooms_to_book:
-                                    for i in range(start_block, end_block_with_buffer):
-                                        self.room_availability_grid[day_str][room][i] = True
-                                
-                                exam_record = {
-                                    'Date': day_str,
-                                    'Subject': group['Subject'],
-                                    'Instructor': instructor,
-                                    'EduProgram': group['EduProgram'],
-                                    'Section': section,
-                                    'Students_Count': num_students,
-                                    'Room': final_room_str,
-                                    'Time_Slot': exam_time_slot_str,
-                                    'Duration': duration_minutes,
-                                    'proctor_needed': group.get('proctor_needed', False),
-                                    'two_rooms_needed': two_rooms_needed,
-                                    'pinned': False
-                                }
+                                self._book_slot(day_str, start_block, total_blocks_needed, rooms_to_book, num_blocks_in_day)
+                                exam_record = self._create_exam_record(group, day_str, exam_time_slot_str, final_room_str, num_students)
                                 self.schedule.append(exam_record)
-                                for student_id in students:
-                                    self.student_exams[student_id].append(exam_record)
-                                
-                                success_count += 1
+                                for student_id in students: self.student_exams[student_id].append(exam_record)
                                 found_slot = True
                                 break
-                        if found_slot:
-                            break
-                    
+                        if found_slot: break
                     if not found_slot:
-                        self.failed_sections.append({
-                            'section': section, 
-                            'num_students': num_students,
-                            'duration': duration_minutes,
-                            'group': group.to_dict()
-                        })
+                        failed_pass_1.append(group)
 
-            # Добавление экзаменов без флага 'has_exam'
+                # 4. PASS 2: Relaxed scheduling
+                if failed_pass_1:
+                    logging.info(f"--- Проход 2: Гибкое планирование для {len(failed_pass_1)} оставшихся секций ---")
+                    students_with_two_exams_a_day = {s for s, exams in self.student_exams.items() if len(set(e['Date'] for e in exams)) < len(exams)}
+                    
+                    for group in failed_pass_1:
+                        section = group['Section']
+                        students = self.exams_df[self.exams_df['Section'] == section]['fake_id'].tolist()
+                        num_students = len(students)
+                        duration_minutes, instructor, two_rooms_needed = int(group.get('Duration', 180)), group['Instructor'], group.get('two_rooms_needed', False)
+                        exam_blocks = math.ceil(duration_minutes / time_step_minutes)
+                        buffer_blocks = math.ceil(buffer_minutes / time_step_minutes)
+                        total_blocks_needed = exam_blocks + buffer_blocks
+                        found_slot = False
+                        for day in self.custom_dates:
+                            day_str = day.strftime('%Y-%m-%d')
+                            for start_block in range(num_blocks_in_day - total_blocks_needed + 1):
+                                exam_time_slot_str = f"{(work_day_start_dt + timedelta(minutes=start_block * time_step_minutes)).strftime('%H:%M')}-{(work_day_start_dt + timedelta(minutes=(start_block + exam_blocks) * time_step_minutes)).strftime('%H:%M')}"
+                                
+                                newly_conflicted = {s_id for s_id in students if any(e['Date'] == day_str for e in self.student_exams[s_id]) and s_id not in students_with_two_exams_a_day}
+                                if len(students_with_two_exams_a_day) + len(newly_conflicted) > 20: continue
+                                
+                                if any(self.check_overlap(e['Time_Slot'], exam_time_slot_str) for s_id in students for e in self.student_exams[s_id] if e['Date'] == day_str): continue
+                                if not self._is_instructor_available(instructor, day, exam_time_slot_str): continue
+
+                                available_rooms = [r for r in self.rooms if r in self.room_availability_grid[day_str] and not any(self.room_availability_grid[day_str][r][i] for i in range(start_block, start_block + total_blocks_needed))]
+                                final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed)
+
+                                if final_room_str:
+                                    self._book_slot(day_str, start_block, total_blocks_needed, rooms_to_book, num_blocks_in_day)
+                                    exam_record = self._create_exam_record(group, day_str, exam_time_slot_str, final_room_str, num_students)
+                                    self.schedule.append(exam_record)
+                                    for student_id in students: 
+                                        self.student_exams[student_id].append(exam_record)
+                                    students_with_two_exams_a_day.update(newly_conflicted)
+                                    found_slot = True
+                                    break
+                            if found_slot: break
+                        if not found_slot:
+                            self.failed_sections.append(group.to_dict())
+
+            # 5. Add 'no exam' groups and finalize
             if not no_exam_groups.empty and self.custom_dates:
                 for _, group in no_exam_groups.iterrows():
-                    random_date = random.choice(self.custom_dates).strftime('%Y-%m-%d')
-                    self.schedule.append({
-                        'Date': random_date, 
-                        'Subject': group['Subject'], 
-                        'Instructor': group['Instructor'],
-                        'EduProgram': group['EduProgram'], 
-                        'Section': group['Section'],
-                        'Students_Count': len(self.exams_df[self.exams_df['Section'] == group['Section']]),
-                        'Room': 'N/A', 
-                        'Time_Slot': 'N/A', 
-                        'Duration': 0, 
-                        'proctor_needed': False,
-                        'two_rooms_needed': False, 
-                        'pinned': True
-                    })
-                    success_count += 1
-
-            # 6. Создание итогового DataFrame
-            self.schedule_df = pd.DataFrame(self.schedule) if self.schedule else pd.DataFrame()
+                    self.schedule.append({'Date': random.choice(self.custom_dates).strftime('%Y-%m-%d'), 'Subject': group['Subject'], 'Instructor': group['Instructor'], 'EduProgram': group['EduProgram'], 'Section': group['Section'], 'Students_Count': len(self.exams_df[self.exams_df['Section'] == group['Section']]), 'Room': 'N/A', 'Time_Slot': 'N/A', 'Duration': 0, 'proctor_needed': False, 'two_rooms_needed': False, 'pinned': True})
             
-            self.student_exams, _ = self.optimize_schedule(self.student_exams)
+            self.schedule_df = pd.DataFrame(self.schedule) if self.schedule else pd.DataFrame()
+            if not self.schedule_df.empty:
+                # Re-run optimizer after all scheduling is complete
+                self.student_exams, final_conflicts = self.optimize_schedule(self.student_exams)
+                if final_conflicts: logging.warning(f"Остались студенты с конфликтами в один день: {len(final_conflicts)}")
 
+            # FINAL ATTEMPT WITH SIMULATED ANNEALING
+            logging.critical(f"ПРОВЕРКА ПЕРЕД SA: Количество неразмещенных секций = {len(self.failed_sections)}")
+            print(f"DEBUG PRINT: About to check for SA. Failed count: {len(self.failed_sections)}")
+            if self.failed_sections:
+                logging.critical("!!! ЗАПУСК СИМУЛЯЦИИ ОТЖИГА !!!")
+                print("!!! DEBUG PRINT: ENTERING SIMULATED ANNEALING !!!")
+                self.run_simulated_annealing()
+            else:
+                logging.critical("!!! СИМУЛЯЦИЯ ОТЖИГА НЕ ЗАПУЩЕНА (нет неразмещенных секций) !!!")
+                print("!!! DEBUG PRINT: SKIPPING SIMULATED ANNEALING (no failed sections) !!!")
+
+            # Re-create the final DataFrame and assign seats after all optimizations
+            self.schedule_df = pd.DataFrame(self.schedule) if self.schedule else pd.DataFrame()
             if not self.schedule_df.empty:
                 self.assign_seats()
 
-            total_groups_to_schedule = len(self.exam_groups)
-            
-            # Calculate the number of successfully processed sections
-            # This includes manually booked, auto-scheduled, and has_exam=False sections.
-            # It should be total groups minus those that failed to schedule (has_exam=True but no slot found).
-            actual_successful_sections_count = total_groups_to_schedule - len(self.failed_sections)
-
-            logging.info(f"Успешно запланировано: {actual_successful_sections_count} из {total_groups_to_schedule} групп")
+            total_groups_to_schedule = len(self.exam_groups[self.exam_groups['has_exam'] == True])
+            logging.info(f"Успешно запланировано: {total_groups_to_schedule - len(self.failed_sections)} из {total_groups_to_schedule} групп")
             if self.failed_sections:
                 logging.warning(f"Не удалось запланировать {len(self.failed_sections)} секций. Детали:")
-                for f in self.failed_sections:
-                    logging.warning(f"  - Секция: {f.get('section')}, Студентов: {f.get('num_students')}")
-
+                for f in self.failed_sections: 
+                    # Find student_count for the failed section if it exists in the original df
+                    student_count = f.get('student_count', 'N/A')
+                    logging.warning(f"  - Секция: {f.get('Section')}, Студентов: {student_count}")
             return self.schedule_df
 
         except Exception as e:
@@ -1821,7 +1833,9 @@ class ExamScheduler:
         self.schedule_df.to_excel(output_excel, index=False)
         logging.info(f"Измененное расписание сохранено в файл {output_excel}.")
 
-    def assign_seats(self):
+    def assign_seats(
+        self,
+    ):
         """
         Распределяет студентов по аудиториям с учетом вместимости и требования двух комнат,
         сохраняя информацию о местах в seat_assignments.
@@ -1832,12 +1846,18 @@ class ExamScheduler:
 
         # Log rooms_df contents
         logging.info(
-            f"Содержимое rooms_df: {self.rooms_df.to_dict() if not self.rooms_df.empty else 'Пустой DataFrame'}")
+            f"Содержимое rooms_df: {self.rooms_df.to_dict() if not self.rooms_df.empty else 'Пустой DataFrame'}"
+        )
         logging.info(
-            f"Колонки rooms_df: {list(self.rooms_df.columns) if not self.rooms_df.empty else 'Нет колонок'}")
+            f"Колонки rooms_df: {list(self.rooms_df.columns) if not self.rooms_df.empty else 'Нет колонок'}"
+        )
 
         # Кэшируем room_capacities с преобразованием к int
-        capacity_column = 'Вместительность аудитории' if 'Вместительность аудитории' in self.rooms_df.columns else 'Capacity'
+        capacity_column = (
+            'Вместительность аудитории'
+            if 'Вместительность аудитории' in self.rooms_df.columns
+            else 'Capacity'
+        )
         room_capacities = {}
         if not self.rooms_df.empty and capacity_column in self.rooms_df.columns:
             for _, row in self.rooms_df.iterrows():
@@ -1845,7 +1865,9 @@ class ExamScheduler:
                 try:
                     capacity = int(row[capacity_column])
                 except (ValueError, TypeError):
-                    logging.warning(f"Некорректная вместимость для {room_name}: {row[capacity_column]}. Используем 25.")
+                    logging.warning(
+                        f"Некорректная вместимость для {room_name}: {row[capacity_column]}. Используем 25."
+                    )
                     capacity = 25
                 room_capacities[room_name] = capacity
         logging.info(f"Кэшированные вместимости: {room_capacities}")
@@ -1857,14 +1879,24 @@ class ExamScheduler:
         for _, exam in self.schedule_df.iterrows():
             try:
                 if exam['Date'] == 'N/A' or pd.isna(exam['Date']):
-                    logging.warning(f"Skipping seat assignment for section {exam.get('Section', 'unknown')} because Date is 'N/A' or empty.")
+                    logging.warning(
+                        f"Skipping seat assignment for section {exam.get('Section', 'unknown')} because Date is 'N/A' or empty."
+                    )
                     continue
-                
-                required_fields = ['Date', 'Time_Slot', 'Subject', 'Section', 'Room', 'Instructor']
+
+                required_fields = [
+                    'Date',
+                    'Time_Slot',
+                    'Subject',
+                    'Section',
+                    'Room',
+                    'Instructor',
+                ]
                 if not all(field in exam and pd.notna(exam[field]) for field in required_fields):
                     problem_sections.append(exam.get('Section', 'unknown'))
                     logging.error(
-                        f"Отсутствуют обязательные поля в секции {exam.get('Section', 'unknown')}: {exam.to_dict()}")
+                        f"Отсутствуют обязательные поля в секции {exam.get('Section', 'unknown')}: {exam.to_dict()}"
+                    )
                     continue
 
                 students = self.get_students_for_section(exam['Section'])
@@ -1873,11 +1905,15 @@ class ExamScheduler:
                     continue
 
                 two_rooms_needed = (
-                    self.exam_groups[self.exam_groups['Section'] == exam['Section']]['two_rooms_needed'].iloc[0]
-                    if exam['Section'] in self.exam_groups['Section'].values else False
+                    self.exam_groups[
+                        self.exam_groups['Section'] == exam['Section']
+                    ]['two_rooms_needed'].iloc[0]
+                    if exam['Section'] in self.exam_groups['Section'].values
+                    else False
                 )
                 logging.info(
-                    f"Секция {exam['Section']}: two_rooms_needed={two_rooms_needed}, студентов={len(students)}, Room={exam['Room']}")
+                    f"Секция {exam['Section']}: two_rooms_needed={two_rooms_needed}, студентов={len(students)}, Room={exam['Room']}"
+                )
 
                 # Парсим аудитории из schedule_df
                 room_string = str(exam['Room']).strip().lower()  # Очистка: strip + lower
@@ -1886,10 +1922,11 @@ class ExamScheduler:
 
                 if two_rooms_needed:
                     # Для two_rooms_needed ожидаем формат "room1,room2"
-                    room_parts = [part.strip().lower() for part in room_string.split(',')]  # Очистка частей
+                    room_parts = [part.strip().lower() for part in room_string.split(',')]
                     if len(room_parts) != 2:
                         logging.error(
-                            f"Секция {exam['Section']} требует две аудитории, но найдено {len(room_parts)}: {room_parts}")
+                            f"Секция {exam['Section']} требует две аудитории, но найдено {len(room_parts)}: {room_parts}"
+                        )
                         problem_sections.append(exam['Section'])
                         continue
                 else:
@@ -1905,7 +1942,8 @@ class ExamScheduler:
                         if room_name not in room_capacities:
                             logging.warning(
                                 f"Аудитория '{room_name}' не найдена в rooms_df для секции {exam['Section']}. "
-                                f"Используем вместимость {capacity}.")
+                                f"Используем вместимость {capacity}."
+                            )
                         else:
                             capacity = room_capacities[room_name]
                             logging.info(f"Аудитория {room_name} найдена, вместимость: {capacity}")
@@ -1914,20 +1952,23 @@ class ExamScheduler:
                         total_capacity += capacity
                     except Exception as e:
                         logging.error(
-                            f"Ошибка парсинга аудитории '{room_part}' для секции {exam['Section']}: {str(e)}")
+                            f"Ошибка парсинга аудитории '{room_part}' для секции {exam['Section']}: {str(e)}"
+                        )
                         problem_sections.append(exam['Section'])
                         continue
 
                 # Проверка вместимости
                 if total_capacity < len(students):
                     logging.error(
-                        f"Недостаточная вместимость ({total_capacity}) для {len(students)} студентов в секции {exam['Section']}")
+                        f"Недостаточная вместимость ({total_capacity}) для {len(students)} студентов в секции {exam['Section']}"
+                    )
                     if not two_rooms_needed:
                         # Пробуем добавить одну аудиторию
                         available_rooms = [
-                            r for r in room_capacities.keys()
+                            r
+                            for r in room_capacities.keys()
                             if r not in [room[0] for room in rooms]
-                               and room_capacities[r] >= len(students) - total_capacity
+                            and room_capacities[r] >= len(students) - total_capacity
                         ]
                         if available_rooms:
                             new_room = available_rooms[0]
@@ -1935,7 +1976,8 @@ class ExamScheduler:
                             rooms.append((new_room, new_capacity))
                             total_capacity += new_capacity
                             logging.info(
-                                f"Добавлена аудитория {new_room}({new_capacity}) для секции {exam['Section']}")
+                                f"Добавлена аудитория {new_room}({new_capacity}) для секции {exam['Section']}"
+                            )
                         else:
                             logging.error(f"Нет подходящих аудиторий для секции {exam['Section']}")
                             problem_sections.append(exam['Section'])
@@ -1963,7 +2005,7 @@ class ExamScheduler:
                             'section': exam['Section'],
                             'subject': exam['Subject'],
                             'date': exam_date.isoformat(),
-                            'time_slot': exam['Time_Slot']
+                            'time_slot': exam['Time_Slot'],
                         }
                         student_index += 1
                         assigned_to_room += 1
@@ -1971,11 +2013,13 @@ class ExamScheduler:
 
                     if assigned_to_room == 0:
                         logging.warning(
-                            f"Не распределены студенты в аудиторию {room_name} для секции {exam['Section']}")
+                            f"Не распределены студенты в аудиторию {room_name} для секции {exam['Section']}"
+                        )
 
                 if student_index < len(students):
                     logging.warning(
-                        f"Не все студенты распределены для секции {exam['Section']}: {len(students) - student_index} остались")
+                        f"Не все студенты распределены для секции {exam['Section']}: {len(students) - student_index} остались"
+                    )
                     problem_sections.append(exam['Section'])
 
             except Exception as e:
@@ -2018,3 +2062,116 @@ class ExamScheduler:
 
         section_students = self.exams_df[self.exams_df['Section'] == section_id]
         return section_students['fake_id'].tolist()
+
+    def run_simulated_annealing(self):
+        """
+        Attempts to schedule remaining failed sections using a simulated annealing approach.
+        This method tries to find slots for failed sections, accepting temporary increases 
+        in student conflicts to escape local optima.
+        """
+        print("!!! DEBUG PRINT: INSIDE run_simulated_annealing METHOD !!!")
+        logging.critical("!!! МЕТОД run_simulated_annealing ВЫЗВАН !!!")
+        if not self.failed_sections:
+            logging.critical("SA: Метод вызван, но self.failed_sections пуст. Выход.")
+            return
+
+        # SA Parameters
+        temp = 1.0
+        min_temp = 0.0001
+        alpha = 0.99
+        max_iterations = 5000
+
+        def calculate_cost(failed_count, student_exams_dict):
+            failed_penalty = 10000  # High penalty for each failed section
+            conflict_cost = self.get_total_conflicts(student_exams_dict)
+            return failed_count * failed_penalty + conflict_cost
+
+        current_cost = calculate_cost(len(self.failed_sections), self.student_exams)
+        logging.info(
+            f"SA: Начальная стоимость: {current_cost} ({len(self.failed_sections)} неразмещенных, {self.get_total_conflicts(self.student_exams)} конфликтов)"
+        )
+
+        for i in range(max_iterations):
+            if not self.failed_sections:
+                logging.info("SA: Все секции были успешно запланированы!")
+                break
+
+            # --- The only move: Try to schedule a failed section ---
+            section_to_schedule_dict = random.choice(self.failed_sections)
+
+            group_info_series = self.exam_groups[
+                self.exam_groups['Section'] == section_to_schedule_dict['Section']
+            ]
+            if group_info_series.empty:
+                continue
+            group_info = group_info_series.iloc[0]
+
+            # Find a random day and try to find a slot there
+            day_to_try = random.choice(self.custom_dates)
+            day_str = day_to_try.strftime('%Y-%m-%d')
+
+            # Find a physically possible slot (room, instructor, time)
+            # We pass the group info as a dictionary
+            new_slot_info = self._find_free_slot_for_exam(day_str, group_info.to_dict())
+
+            if new_slot_info:
+                # Create a record for the new exam
+                num_students = section_to_schedule_dict.get(
+                    'student_count',
+                    len(self.exams_df[self.exams_df['Section'] == group_info['Section']]),
+                )
+                new_exam_record = self._create_exam_record(
+                    group_info,
+                    new_slot_info['Date'],
+                    new_slot_info['Time_Slot'],
+                    new_slot_info['Room'],
+                    num_students,
+                )
+
+                # Create a temporary state to evaluate cost
+                temp_student_exams = {k: [e.copy() for e in v] for k, v in self.student_exams.items()}
+                students = self.exams_df[
+                    self.exams_df['Section'] == new_exam_record['Section']
+                ]['fake_id'].tolist()
+                for sid in students:
+                    if sid not in temp_student_exams: temp_student_exams[sid] = []
+                    temp_student_exams[sid].append(new_exam_record)
+
+                new_cost = calculate_cost(len(self.failed_sections) - 1, temp_student_exams)
+                cost_diff = new_cost - current_cost
+
+                # SA acceptance probability
+                if cost_diff < 0 or (temp > 0 and math.exp(-cost_diff / temp) > random.random()):
+                    # Accept move: update state
+                    self.student_exams = temp_student_exams
+                    self.schedule.append(new_exam_record)
+                    self.failed_sections.remove(section_to_schedule_dict)
+                    current_cost = new_cost
+
+                    # Book the slot in the grid
+                    duration_minutes = new_exam_record['Duration']
+                    exam_blocks = math.ceil(duration_minutes / self.time_step)
+                    buffer_blocks = math.ceil(self.buffer_time / self.time_step)
+                    total_blocks_needed = exam_blocks + buffer_blocks
+                    num_blocks_in_day = int(
+                        ((self.work_day_end - self.work_day_start).total_seconds() / 60)
+                        / self.time_step
+                    )
+                    self._book_slot(
+                        new_slot_info['Date'],
+                        new_slot_info['start_block'],
+                        total_blocks_needed,
+                        new_slot_info['rooms_to_book'],
+                        num_blocks_in_day,
+                    )
+
+                    logging.info(
+                        f"SA (Accepted): Секция {new_exam_record['Section']} запланирована. Новая стоимость: {current_cost:.0f}. Осталось: {len(self.failed_sections)}"
+                    )
+
+            # Cool down temperature
+            temp *= alpha
+
+        logging.info(
+            f"SA: Завершено. Финальная стоимость: {current_cost:.0f} ({len(self.failed_sections)} неразмещенных)"
+        )
