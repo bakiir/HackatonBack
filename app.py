@@ -708,6 +708,9 @@ def handle_management():
             # Generate the schedule
             current_scheduler.create_schedule()
 
+            # Analyze failed sections
+            analysis_report = current_scheduler.analyze_failed_sections_details()
+
             # Деактивируем все предыдущие сессии и создаём новую
             session.query(ExamSession).update({'is_active': False})
             new_session = ExamSession(
@@ -741,7 +744,8 @@ def handle_management():
                 'schedule': sanitized_schedule,
                 'stats': {
                     'total': len(current_scheduler.exam_groups),
-                    'scheduled': len(current_scheduler.schedule_df)
+                    'scheduled': len(current_scheduler.schedule_df),
+                    'failed_sections_report': analysis_report
                 }
             })
 
