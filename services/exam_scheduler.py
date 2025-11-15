@@ -1239,7 +1239,7 @@ class ExamScheduler:
         return delta_cost
 
     def optimize_schedule(self, student_exams):
-        logging.info("Запуск быстрой оптимизации расписания (Hill Climbing с дельта-оценкой)...")
+        logging.info("Запуск оптимизации расписания (Simulated Annealing)...")
 
         def get_conflicting_exam_indices(schedule, student_exams_dict):
             conflicting_indices = set()
@@ -1257,9 +1257,13 @@ class ExamScheduler:
                                     break
             return list(conflicting_indices)
 
-        max_iterations = 40000
+        max_iterations = 100000
         no_improvement_streak = 0
-        max_no_improvement = 3000
+        max_no_improvement = 10000
+        
+        initial_temperature = 1.0
+        cooling_rate = 0.99995
+        temperature = initial_temperature
 
         current_cost = self.get_total_conflicts(student_exams)
         logging.info(f"[Оптимизация, старт] Начальная стоимость (конфликты): {current_cost}")
@@ -1288,7 +1292,7 @@ class ExamScheduler:
             if new_slot_info and new_slot_info['Date'] != exam_to_move['Date']:
                 delta_cost = self._calculate_move_delta_cost(exam_to_move, new_slot_info['Date'], student_exams)
 
-                if delta_cost < 0:
+                if delta_cost < 0 or (temperature > 0 and random.random() < math.exp(-delta_cost / temperature)):
                     num_blocks_in_day = int(((self.work_day_end - self.work_day_start).total_seconds() / 60) / self.time_step)
                     self._release_slot(schedule_idx, num_blocks_in_day)
                     self._move_exam(schedule_idx, new_slot_info, student_exams)
@@ -1303,6 +1307,8 @@ class ExamScheduler:
                     no_improvement_streak += 1
             else:
                 no_improvement_streak += 1
+
+            temperature *= cooling_rate
 
             if no_improvement_streak > max_no_improvement:
                 logging.warning(f"Оптимизация остановлена из-за отсутствия улучшений в течение {max_no_improvement} итераций.")
