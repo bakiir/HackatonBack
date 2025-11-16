@@ -351,6 +351,18 @@ class ExamScheduler:
             self.rooms_df['Аудитория'].astype(str).str.strip(),
             self.rooms_df['Вместительность аудитории']
         ))
+
+        # Load room types, defaulting to 'regular' if column is missing
+        if 'Type' in self.rooms_df.columns:
+            self.room_types = dict(zip(
+                self.rooms_df['Аудитория'].astype(str).str.strip(),
+                self.rooms_df['Type']
+            ))
+            logging.info("Загружены типы аудиторий.")
+        else:
+            self.room_types = {room: 'regular' for room in self.rooms}
+            logging.warning("Колонка 'Type' не найдена в файле аудиторий. Все аудитории считаются 'regular'.")
+        
         self.all_students_dict = self.exams_df[['fake_id', 'fake_name']].drop_duplicates().to_dict('records')
         self.exam_groups["Duration"] = 180  # Дефолтная длительность
         self.subject_faculty_map = self.faculties_df.groupby('Subject')['Faculty'].apply(set).to_dict()
@@ -989,22 +1001,33 @@ class ExamScheduler:
         finally:
             session.close()
 
-    def _find_suitable_rooms(self, available_rooms, num_students, two_rooms_needed):
-        """Finds suitable rooms for a given exam group."""
+    def _find_suitable_rooms(self, available_rooms, num_students, two_rooms_needed, classroom_type='regular'):
+        """Finds suitable rooms for a given exam group, considering the classroom type."""
+        
+        # Filter rooms by the required type
+        typed_available_rooms = [
+            r for r in available_rooms 
+            if self.room_types.get(r, 'regular') == classroom_type
+        ]
+
+        if not typed_available_rooms:
+            logging.warning(f"Не найдено свободных аудиторий типа '{classroom_type}' для экзамена.")
+            return None, []
+
         final_room_str = None
         rooms_to_book = []
         if not two_rooms_needed:
             room_107 = '107'
-            if room_107 in available_rooms and self.room_capacities.get(room_107, 0) >= num_students:
+            if room_107 in typed_available_rooms and self.room_capacities.get(room_107, 0) >= num_students:
                 final_room_str = room_107
                 rooms_to_book.append(final_room_str)
             else:
-                suitable_rooms = [r for r in available_rooms if self.room_capacities.get(r, 0) >= num_students and r != room_107]
+                suitable_rooms = [r for r in typed_available_rooms if self.room_capacities.get(r, 0) >= num_students and r != room_107]
                 if suitable_rooms:
                     final_room_str = min(suitable_rooms, key=lambda r: self.room_capacities.get(r, 0))
                     rooms_to_book.append(final_room_str)
         else:
-            room_pairs = list(combinations(available_rooms, 2))
+            room_pairs = list(combinations(typed_available_rooms, 2))
             suitable_pairs = [
                 pair for pair in room_pairs
                 if self.room_capacities.get(str(pair[0]), 0) + self.room_capacities.get(str(pair[1]), 0) >= num_students
@@ -1153,7 +1176,8 @@ class ExamScheduler:
                                 if not self._is_room_excluded(r, day, exam_start_dt, exam_end_dt)
                             ]
                             
-                            final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed)
+                            classroom_type = group.get('classroom_type', 'regular')
+                            final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed, classroom_type)
                             if final_room_str:
                                 possible_slots.append({'day_str': day_str, 'start_block': start_block, 'time_slot_str': exam_time_slot_str, 'room_str': final_room_str, 'rooms_to_book': rooms_to_book})
                     
@@ -1197,7 +1221,8 @@ class ExamScheduler:
                                     if not self._is_room_excluded(r, day, exam_start_dt, exam_end_dt)
                                 ]
 
-                                final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed)
+                                classroom_type = group.get('classroom_type', 'regular')
+                                final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed, classroom_type)
                                 if final_room_str:
                                     possible_slots.append({'day_str': day_str, 'start_block': start_block, 'time_slot_str': exam_time_slot_str, 'room_str': final_room_str, 'rooms_to_book': rooms_to_book, 'conflicts': conflicts})
 
@@ -1409,7 +1434,8 @@ class ExamScheduler:
                 if not self._is_room_excluded(r, day_obj, exam_start_dt, exam_end_dt)
             ]
 
-            final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed)
+            classroom_type = exam_rec.get('classroom_type', 'regular')
+            final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed, classroom_type)
 
             if final_room_str:
                 return {'Date': day_str, 'Time_Slot': exam_time_slot_str, 'Room': final_room_str, 'start_block': start_block, 'rooms_to_book': rooms_to_book}
