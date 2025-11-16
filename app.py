@@ -35,6 +35,10 @@ role_to_faculty = {
 def handle_nan_values(obj):
     if isinstance(obj, (float, np.float64, np.float32)) and (math.isnan(obj) or np.isnan(obj)):
         return None
+    if isinstance(obj, (np.int64, np.int32)):
+        return int(obj)
+    if isinstance(obj, (np.float64, np.float32)):
+        return float(obj)
     elif isinstance(obj, dict):
         return {key: handle_nan_values(value) for key, value in obj.items()}
     elif isinstance(obj, list):
@@ -1266,24 +1270,11 @@ def get_resolved_conflicts():
         db_session.close()
 
 
-def convert_numpy_types(obj):
-    if isinstance(obj, (np.int64, np.int32)):
-        return int(obj)
-    elif isinstance(obj, (np.float64, np.float32)):
-        return float(obj)
-    elif isinstance(obj, dict):
-        return {key: convert_numpy_types(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_numpy_types(item) for item in obj]
-    else:
-        return obj
-
-
 @app.route('/section/<section_id>')
 def get_section_info(section_id):
     section_info = current_scheduler.get_section_info(section_id)
-    # Преобразуем numpy типы в стандартные типы Python
-    section_info = convert_numpy_types(section_info)
+    # Преобразуем numpy типы и NaN в стандартные типы Python
+    section_info = handle_nan_values(section_info)
     return jsonify(section_info)  # Возвращаем словарь как JSON
 
 
