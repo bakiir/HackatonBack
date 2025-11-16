@@ -164,6 +164,28 @@ class ResolvedConflict(Base):
             "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
         }
 
+
+class RoomExclusion(Base):
+    __tablename__ = 'room_exclusions'
+
+    id = Column(Integer, primary_key=True)
+    room_number = Column(String, nullable=False)
+    exclusion_date = Column(Date, nullable=False)
+    start_time = Column(DateTime, nullable=False)
+    end_time = Column(DateTime, nullable=False)
+    reason = Column(String, nullable=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "room_number": self.room_number,
+            "exclusion_date": self.exclusion_date.isoformat(),
+            "start_time": self.start_time.isoformat(),
+            "end_time": self.end_time.isoformat(),
+            "reason": self.reason
+        }
+
+
 engine = create_engine(
     "postgresql+psycopg2://postgres:mysecretpassword@localhost:5433/postgres",
     connect_args={'client_encoding': 'utf8'}

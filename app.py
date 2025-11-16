@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import os
 from flask import request
-from create_db import ExamSession, engine, ExamSessionDraft, AdminStatusDraft
+from create_db import ExamSession, engine, ExamSessionDraft, AdminStatusDraft, RoomExclusion
 from sqlalchemy.orm import sessionmaker
 import json # Added this import
 
@@ -431,6 +431,16 @@ def handle_initialization():
     global current_scheduler
 
     try:
+        # Clear old room exclusions at the start of initialization
+        try:
+            num_deleted = session.query(RoomExclusion).delete()
+            session.commit()
+            logging.info(f"Удалено {num_deleted} старых правил блокировки аудиторий.")
+        except Exception as e:
+            session.rollback()
+            logging.error(f"Ошибка при удалении старых блокировок: {str(e)}")
+            return jsonify({'status': 'error', 'message': f'Ошибка при очистке старых блокировок: {str(e)}'}), 500
+
         # 1. Загрузка файлов
         title = request.form.get('title', 'Сезон без имени')
         exams_file = request.files['exams']
@@ -560,10 +570,10 @@ def manage_dates():
             update_classroom_slots(current_scheduler.get_current_dates(), current_scheduler.rooms_df)
             logging.info('Исходные даты восстановлены')
             return jsonify({
-                'status': 'success',
-                'message': 'Исходные даты восстановлены',
-                'dates': current_scheduler.get_current_dates()
-            })
+            'status': 'success',
+            'message': 'Исходные даты восстановлены',
+            'dates': current_scheduler.get_current_dates()
+        })
 
     except Exception as e:
         logging.error(f"Ошибка управления датами: {str(e)}")
@@ -571,6 +581,86 @@ def manage_dates():
             'status': 'error',
             'message': f'Ошибка управления датами: {str(e)}'
         }), 500
+
+
+@app.route('/api/manage-rooms', methods=['POST'])
+@admin_required("admin")
+def manage_rooms():
+    session = Session()
+    try:
+        data = request.json
+        
+        # Если на вход подается один объект, оборачиваем его в список для универсальной обработки
+        if isinstance(data, dict):
+            data = [data]
+
+        results = []
+        for item in data:
+            action = item.get('action')
+            room_number = item.get('room_number')
+            date_str = item.get('date')
+            start_time_str = item.get('start_time')
+            end_time_str = item.get('end_time')
+            reason = item.get('reason')
+
+            if not all([action, room_number, date_str, start_time_str, end_time_str]):
+                results.append({'error': 'Missing required parameters for an item', 'item': item})
+                continue
+
+            try:
+                exclusion_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                start_time_obj = datetime.strptime(start_time_str, '%H:%M').time()
+                end_time_obj = datetime.strptime(end_time_str, '%H:%M').time()
+
+                start_datetime = datetime.combine(exclusion_date, start_time_obj)
+                end_datetime = datetime.combine(exclusion_date, end_time_obj)
+            except ValueError as e:
+                results.append({'error': f'Invalid date or time format: {e}', 'item': item})
+                continue
+
+            if action == 'block':
+                new_exclusion = RoomExclusion(
+                    room_number=str(room_number),
+                    exclusion_date=exclusion_date,
+                    start_time=start_datetime,
+                    end_time=end_datetime,
+                    reason=reason
+                )
+                session.add(new_exclusion)
+                results.append({'status': 'success', 'message': f'Room {room_number} scheduled for blocking.'})
+
+            elif action == 'unblock':
+                exclusion_to_delete = session.query(RoomExclusion).filter_by(
+                    room_number=str(room_number),
+                    exclusion_date=exclusion_date,
+                    start_time=start_datetime,
+                    end_time=end_datetime
+                ).first()
+
+                if exclusion_to_delete:
+                    session.delete(exclusion_to_delete)
+                    results.append({'status': 'success', 'message': f'Block on room {room_number} scheduled for removal.'})
+                else:
+                    results.append({'error': 'Exclusion record not found.', 'item': item})
+            
+            else:
+                results.append({'error': 'Invalid action. Use "block" or "unblock".', 'item': item})
+        
+        # Проверяем, есть ли ошибки
+        has_errors = any('error' in r for r in results)
+        if has_errors:
+            session.rollback()
+            return jsonify({'results': results}), 400
+        else:
+            session.commit()
+            return jsonify({'results': results}), 200
+
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Error in manage_rooms: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 
 Session = sessionmaker(bind=engine)

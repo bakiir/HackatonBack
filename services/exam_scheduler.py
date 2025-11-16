@@ -1057,6 +1057,23 @@ class ExamScheduler:
         self.student_exams = defaultdict(list)
         self.failed_sections = []
 
+        # Загрузка исключений из БД
+        try:
+            from create_db import RoomExclusion, engine
+            from sqlalchemy.orm import sessionmaker
+            Session = sessionmaker(bind=engine)
+            db_session = Session()
+            all_exclusions = db_session.query(RoomExclusion).all()
+            db_session.close()
+
+            self.exclusions_by_date = defaultdict(list)
+            for exc in all_exclusions:
+                self.exclusions_by_date[exc.exclusion_date].append(exc)
+            logging.info(f"Загружено {len(all_exclusions)} правил исключения аудиторий.")
+        except Exception as e:
+            logging.error(f"Не удалось загрузить исключения аудиторий из БД: {e}")
+            self.exclusions_by_date = defaultdict(list)
+
         try:
             # 1. Инициализация
             time_step_minutes = self.time_step
@@ -1123,9 +1140,19 @@ class ExamScheduler:
                         if not all(self._is_student_available_for_exam(s_id, day_str, group.to_dict()) for s_id in students):
                             continue
                         for start_block in range(num_blocks_in_day - total_blocks_needed + 1):
-                            exam_time_slot_str = f"{(work_day_start_dt + timedelta(minutes=start_block * time_step_minutes)).strftime('%H:%M')}-{(work_day_start_dt + timedelta(minutes=(start_block + exam_blocks) * time_step_minutes)).strftime('%H:%M')}"
+                            day_start_dt = datetime.combine(day.date(), work_day_start_dt.time())
+                            exam_start_dt = day_start_dt + timedelta(minutes=start_block * time_step_minutes)
+                            exam_end_dt = exam_start_dt + timedelta(minutes=exam_blocks * time_step_minutes)
+                            exam_time_slot_str = f"{exam_start_dt.strftime('%H:%M')}-{exam_end_dt.strftime('%H:%M')}"
                             if not self._is_instructor_available(instructor, day, exam_time_slot_str): continue
-                            available_rooms = [r for r in self.rooms if r in self.room_availability_grid[day_str] and not any(self.room_availability_grid[day_str][r][i] for i in range(start_block, start_block + total_blocks_needed))]
+                            
+                            grid_available_rooms = [r for r in self.rooms if r in self.room_availability_grid[day_str] and not any(self.room_availability_grid[day_str][r][i] for i in range(start_block, start_block + total_blocks_needed))]
+                            
+                            available_rooms = [
+                                r for r in grid_available_rooms
+                                if not self._is_room_excluded(r, day, exam_start_dt, exam_end_dt)
+                            ]
+                            
                             final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed)
                             if final_room_str:
                                 possible_slots.append({'day_str': day_str, 'start_block': start_block, 'time_slot_str': exam_time_slot_str, 'room_str': final_room_str, 'rooms_to_book': rooms_to_book})
@@ -1157,9 +1184,19 @@ class ExamScheduler:
                             day_str = day.strftime('%Y-%m-%d')
                             conflicts = sum(1 for s_id in students if not self._is_student_available_for_exam(s_id, day_str, group.to_dict()))
                             for start_block in range(num_blocks_in_day - total_blocks_needed + 1):
-                                exam_time_slot_str = f"{(work_day_start_dt + timedelta(minutes=start_block * time_step_minutes)).strftime('%H:%M')}-{(work_day_start_dt + timedelta(minutes=(start_block + exam_blocks) * time_step_minutes)).strftime('%H:%M')}"
+                                day_start_dt = datetime.combine(day.date(), work_day_start_dt.time())
+                                exam_start_dt = day_start_dt + timedelta(minutes=start_block * time_step_minutes)
+                                exam_end_dt = exam_start_dt + timedelta(minutes=exam_blocks * time_step_minutes)
+                                exam_time_slot_str = f"{exam_start_dt.strftime('%H:%M')}-{exam_end_dt.strftime('%H:%M')}"
                                 if not self._is_instructor_available(instructor, day, exam_time_slot_str): continue
-                                available_rooms = [r for r in self.rooms if r in self.room_availability_grid[day_str] and not any(self.room_availability_grid[day_str][r][i] for i in range(start_block, start_block + total_blocks_needed))]
+                                
+                                grid_available_rooms = [r for r in self.rooms if r in self.room_availability_grid[day_str] and not any(self.room_availability_grid[day_str][r][i] for i in range(start_block, start_block + total_blocks_needed))]
+                                
+                                available_rooms = [
+                                    r for r in grid_available_rooms
+                                    if not self._is_room_excluded(r, day, exam_start_dt, exam_end_dt)
+                                ]
+
                                 final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed)
                                 if final_room_str:
                                     possible_slots.append({'day_str': day_str, 'start_block': start_block, 'time_slot_str': exam_time_slot_str, 'room_str': final_room_str, 'rooms_to_book': rooms_to_book, 'conflicts': conflicts})
@@ -1352,39 +1389,27 @@ class ExamScheduler:
         possible_starts = list(range(num_blocks_in_day - total_blocks_needed + 1))
         random.shuffle(possible_starts)
 
+        day_obj = datetime.strptime(day_str, '%Y-%m-%d')
+
         for start_block in possible_starts:
             end_block_with_buffer = start_block + total_blocks_needed
             
-            exam_start_time = work_day_start_dt + timedelta(minutes=start_block * time_step_minutes)
-            exam_time_slot_str = f"{exam_start_time.strftime('%H:%M')}-{(exam_start_time + timedelta(minutes=duration_minutes)).strftime('%H:%M')}"
+            day_start_dt = datetime.combine(day_obj.date(), work_day_start_dt.time())
+            exam_start_dt = day_start_dt + timedelta(minutes=start_block * time_step_minutes)
+            exam_end_dt = exam_start_dt + timedelta(minutes=duration_minutes)
+            exam_time_slot_str = f"{exam_start_dt.strftime('%H:%M')}-{exam_end_dt.strftime('%H:%M')}"
 
-            day_obj = datetime.strptime(day_str, '%Y-%m-%d')
             if not self._is_instructor_available(instructor, day_obj, exam_time_slot_str):
                 continue
 
-            available_rooms = [r for r in self.rooms if r in self.room_availability_grid[day_str] and not any(self.room_availability_grid[day_str][r][i] for i in range(start_block, end_block_with_buffer))]
+            grid_available_rooms = [r for r in self.rooms if r in self.room_availability_grid[day_str] and not any(self.room_availability_grid[day_str][r][i] for i in range(start_block, end_block_with_buffer))]
             
-            final_room_str = None
-            rooms_to_book = []
-            if not two_rooms_needed:
-                # --- START of custom logic for room 107 ---
-                room_107 = '107'
-                if room_107 in available_rooms and self.room_capacities.get(room_107, 0) >= num_students:
-                    final_room_str = room_107
-                    rooms_to_book.append(final_room_str)
-                else:
-                    suitable_rooms = [r for r in available_rooms if self.room_capacities.get(r, 0) >= num_students and r != room_107]
-                    if suitable_rooms:
-                        final_room_str = min(suitable_rooms, key=lambda r: self.room_capacities.get(r, 0))
-                        rooms_to_book.append(final_room_str)
-                # --- END of custom logic for room 107 ---
-            else:
-                room_pairs = list(combinations(available_rooms, 2))
-                suitable_pairs = [pair for pair in room_pairs if self.room_capacities.get(pair[0], 0) + self.room_capacities.get(pair[1], 0) >= num_students]
-                if suitable_pairs:
-                    best_pair = min(suitable_pairs, key=lambda p: self.room_capacities.get(p[0], 0) + self.room_capacities.get(p[1], 0))
-                    final_room_str = f"{best_pair[0]},{best_pair[1]}"
-                    rooms_to_book.extend(best_pair)
+            available_rooms = [
+                r for r in grid_available_rooms
+                if not self._is_room_excluded(r, day_obj, exam_start_dt, exam_end_dt)
+            ]
+
+            final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed)
 
             if final_room_str:
                 return {'Date': day_str, 'Time_Slot': exam_time_slot_str, 'Room': final_room_str, 'start_block': start_block, 'rooms_to_book': rooms_to_book}
@@ -1493,6 +1518,17 @@ class ExamScheduler:
                             if self.check_overlap(exam1.get('Time_Slot'), exam2.get('Time_Slot')):
                                 total_conflicts += 1
         return total_conflicts
+
+    def _is_room_excluded(self, room, day_dt, start_dt, end_dt):
+        day_date = day_dt.date()
+        if day_date in self.exclusions_by_date:
+            for exclusion in self.exclusions_by_date[day_date]:
+                if str(exclusion.room_number) == str(room):
+                    # Check for time overlap: (StartA < EndB) and (EndA > StartB)
+                    if max(start_dt, exclusion.start_time) < min(end_dt, exclusion.end_time):
+                        logging.info(f"Room {room} is excluded on {day_date} from {exclusion.start_time.time()} to {exclusion.end_time.time()} due to '{exclusion.reason}'. Exam time: {start_dt.time()}-{end_dt.time()}")
+                        return True  # The room is excluded
+        return False
 
     def check_overlap(self, slot1, slot2):
         if not all([slot1, slot2]) or slot1 == 'N/A' or slot2 == 'N/A': return False
