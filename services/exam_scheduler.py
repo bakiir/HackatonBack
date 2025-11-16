@@ -1478,15 +1478,20 @@ class ExamScheduler:
     def get_total_conflicts(self, student_exams_dict):
         total_conflicts = 0
         for student_id, exams in student_exams_dict.items():
-            exams_on_day = defaultdict(list)
+            exams_on_days = defaultdict(list)
             for exam in exams:
                 if exam.get('Date') and exam['Date'] != 'N/A':
-                    exams_on_day[exam['Date']].append(exam)
+                    exams_on_days[exam['Date']].append(exam)
 
-            for date, daily_exams in exams_on_day.items():
-                num_exams = len(daily_exams)
-                if num_exams > 1:
-                    total_conflicts += (num_exams - 1)
+            for date, daily_exams in exams_on_days.items():
+                if len(daily_exams) > 1:
+                    # Check for actual time overlaps
+                    for i in range(len(daily_exams)):
+                        for j in range(i + 1, len(daily_exams)):
+                            exam1 = daily_exams[i]
+                            exam2 = daily_exams[j]
+                            if self.check_overlap(exam1.get('Time_Slot'), exam2.get('Time_Slot')):
+                                total_conflicts += 1
         return total_conflicts
 
     def check_overlap(self, slot1, slot2):

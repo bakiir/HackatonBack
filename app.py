@@ -14,6 +14,7 @@ import logging
 from flask_cors import CORS
 from services.exam_scheduler import ExamScheduler
 from services.check_student_conflicts import get_student_conflicts
+from services.conflict_resolver import resolve_conflicts_by_moving_student
 import numpy as np
 import pandas as pd
 import os
@@ -1113,9 +1114,9 @@ def get_conflict_report():
     return jsonify(report)
 
 
-@app.route('/api/resolve-day-conflicts', methods=['POST'])
+@app.route('/api/resolve-conflicts-by-group', methods=['POST'])
 @admin_required("admin")
-def resolve_conflicts_api():
+def resolve_conflicts_by_group_api():
     db_session = Session()
     try:
         active_session = db_session.query(ExamSession).filter_by(is_active=True).first()
@@ -1126,27 +1127,26 @@ def resolve_conflicts_api():
         scheduler = ExamScheduler(session_data=active_session)
         
         # Импортируем и вызываем новую функцию
-        from services.conflict_resolver import resolve_day_conflicts
-        changes = resolve_day_conflicts(scheduler, active_session.id)
+        from services.conflict_resolver import resolve_conflicts_by_moving_groups
+        changes = resolve_conflicts_by_moving_groups(scheduler, active_session.id)
 
         if changes:
             # Если были внесены изменения, обновляем данные сессии в БД
-            active_session.exams_data = scheduler.exam_groups.to_json(orient='records')
             active_session.schedule_data = scheduler.schedule_df.to_json(orient='records')
             
-            # Перераспределяем места после изменения секций
+            # Перераспределяем места после изменения дат
             scheduler.assign_seats()
             active_session.seat_assignments = scheduler.seat_assignments
 
             db_session.commit()
-            logging.info(f"Успешно разрешено {len(changes)} конфликтов. Изменения сохранены в сессии {active_session.id}.")
+            logging.info(f"Успешно перемещено {len(changes)} групп. Изменения сохранены в сессии {active_session.id}.")
 
             # Обновляем глобальный планировщик, чтобы изменения были видны сразу
             global current_scheduler
             current_scheduler = scheduler
 
         return jsonify({
-            "message": f"Обработка конфликтов завершена. Перемещено студентов: {len(changes)}.",
+            "message": f"Обработка конфликтов завершена. Перемещено групп: {len(changes)}.",
             "changes": changes
         }), 200
 

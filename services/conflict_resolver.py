@@ -1,10 +1,115 @@
 import logging
-from collections import defaultdict
+from collections import defaultdict, Counter
 import pandas as pd
 from create_db import Session, ResolvedConflict
 from services.check_student_conflicts import get_student_conflicts
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+def resolve_conflicts_by_moving_groups(scheduler, session_id, max_moves=15):
+    """
+    Разрешает конфликты путем перемещения целых экзаменационных групп (секций) в другие слоты.
+    Цель - минимизировать количество перемещений, воздействуя на группы, а не на отдельных студентов.
+    """
+    changes_made = []
+    session = Session()
+    
+    try:
+        # Получаем полный список всех уникальных дат экзаменов
+        available_dates = scheduler.schedule_df['Date'].unique()
+
+        for move_attempt in range(max_moves):
+            # 1. Получаем текущие конфликты
+            conflicts = get_student_conflicts(scheduler)
+            if not conflicts:
+                logging.info("Конфликты не найдены. Разрешение завершено.")
+                break
+
+            logging.info(f"Попытка {move_attempt + 1}/{max_moves}. Найдено конфликтов: {len(conflicts)}")
+
+            # 2. Агрегируем конфликты по секциям, чтобы найти самые проблемные
+            section_conflict_counts = Counter()
+            for conflict in conflicts:
+                for exam in conflict['exams']:
+                    section_conflict_counts[exam['Section']] += 1
+            
+            if not section_conflict_counts:
+                logging.info("Не удалось определить проблемные секции. Завершение.")
+                break
+
+            # 3. Выбираем самую проблемную секцию для перемещения
+            section_to_move, _ = section_conflict_counts.most_common(1)[0]
+            
+            original_schedule_info = scheduler.schedule_df[scheduler.schedule_df['Section'] == section_to_move].iloc[0]
+            original_date = original_schedule_info['Date']
+            subject = original_schedule_info['Subject']
+            students_in_section = scheduler.get_students_in_section(section_to_move)
+            
+            logging.info(f"--- Попытка переместить секцию '{section_to_move}' ({subject}) с {len(students_in_section)} студентами ---")
+
+            best_move = None
+            min_new_conflicts = len(conflicts)
+
+            # 4. Ищем лучший новый слот (дату) для этой секции
+            for new_date in available_dates:
+                if new_date == original_date:
+                    continue
+
+                # 5. Проверяем, не создаст ли перемещение новые конфликты для студентов этой секции
+                new_conflicts_count = 0
+                for student_id in students_in_section:
+                    # Получаем экзамены студента, исключая текущий перемещаемый
+                    student_exams = scheduler.get_student_exams(student_id)
+                    other_exams_on_new_date = [
+                        exam for exam in student_exams 
+                        if exam['Section'] != section_to_move and exam['Date'] == new_date
+                    ]
+                    if other_exams_on_new_date:
+                        new_conflicts_count += 1
+                
+                # Если этот ход не создает новых конфликтов, он является хорошим кандидатом
+                if new_conflicts_count == 0:
+                    # В этом упрощенном примере мы выбираем первый же подходящий слот.
+                    # В более сложной реализации можно было бы оценивать все и выбирать лучший.
+                    best_move = new_date
+                    break
+            
+            # 6. Если найден подходящий слот, выполняем перемещение
+            if best_move is not None:
+                new_date = best_move
+                logging.info(f"Найдено перемещение для секции {section_to_move} на дату {new_date}")
+
+                # Обновляем расписание в памяти
+                scheduler.schedule_df.loc[scheduler.schedule_df['Section'] == section_to_move, 'Date'] = new_date
+                
+                # Логируем изменение
+                change_info = {
+                    "type": "group_move",
+                    "section": section_to_move,
+                    "subject": subject,
+                    "student_count": len(students_in_section),
+                    "from_date": original_date,
+                    "to_date": new_date
+                }
+                changes_made.append(change_info)
+
+                # Здесь можно было бы добавить запись в БД, если требуется
+                # Например, создать новую таблицу для логов перемещения групп
+
+            else:
+                logging.warning(f"Не удалось найти подходящий слот для секции {section_to_move}. Пропускаем.")
+                # Чтобы избежать зацикливания на одной и той же секции, можно добавить логику ее пропуска
+                # в следующих итерациях, но для простоты пока опустим это.
+                break # Прерываем, если не можем найти ход
+
+    finally:
+        # В данном примере мы не сохраняем изменения в БД, но можно добавить
+        # session.commit()
+        session.close()
+
+    logging.info(f"Разрешение конфликтов завершено. Всего перемещено групп: {len(changes_made)}")
+    return changes_made
 
 
 def resolve_conflicts_by_moving_student(scheduler, session_id):
