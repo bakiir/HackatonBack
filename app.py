@@ -14,7 +14,7 @@ import logging
 from flask_cors import CORS
 from services.exam_scheduler import ExamScheduler
 from services.check_student_conflicts import get_student_conflicts
-from services.conflict_resolver import resolve_conflicts_by_moving_student
+from services.conflict_resolver import resolve_conflicts_by_moving_student, resolve_it_lab_conflicts
 import numpy as np
 import pandas as pd
 import os
@@ -802,6 +802,9 @@ def handle_management():
 
             # Generate the schedule
             current_scheduler.create_schedule()
+
+            # Resolve IT lab conflicts
+            resolve_it_lab_conflicts(current_scheduler)
 
             # Analyze failed sections
             analysis_report = current_scheduler.analyze_failed_sections_details()

@@ -3,8 +3,69 @@ from collections import defaultdict, Counter
 import pandas as pd
 from create_db import Session, ResolvedConflict
 from services.check_student_conflicts import get_student_conflicts
+import logging
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename='student_conflicts_log.txt',
+    filemode='a'
+)
+
+def resolve_it_lab_conflicts(scheduler):
+    """
+    Finds exams that require an IT lab but are in a regular room,
+    and swaps them with exams that are in an IT lab but don't require one.
+    """
+    logging.info("Starting IT lab conflict resolution.")
+    schedule_df = scheduler.schedule_df
+    exam_groups = scheduler.exam_groups
+    room_types = scheduler.room_types
+
+    # Merge schedule with exam group properties
+    full_schedule = pd.merge(schedule_df, exam_groups[['Section', 'classroom_type']], on='Section', how='left')
+
+    # Identify misplaced IT groups
+    misplaced_it_groups = full_schedule[
+        (full_schedule['classroom_type'] == 'it_lab') &
+        (full_schedule['Room'].apply(lambda r: room_types.get(str(r), 'regular') != 'it_lab'))
+    ]
+
+    if misplaced_it_groups.empty:
+        logging.info("No misplaced IT lab groups found. No swaps needed.")
+        return
+
+    logging.info(f"Found {len(misplaced_it_groups)} misplaced IT groups to resolve.")
+
+    for index, misplaced_exam in misplaced_it_groups.iterrows():
+        # Find potential swap candidates
+        candidates = full_schedule[
+            (full_schedule['Date'] == misplaced_exam['Date']) &
+            (full_schedule['Time_Slot'] == misplaced_exam['Time_Slot']) &
+            (full_schedule['classroom_type'] != 'it_lab') &
+            (full_schedule['Room'].apply(lambda r: room_types.get(str(r), 'regular') == 'it_lab'))
+        ]
+
+        if not candidates.empty:
+            # Select the first candidate
+            candidate_exam = candidates.iloc[0]
+            
+            # Get original indices from the main schedule_df
+            misplaced_original_idx = misplaced_exam.name
+            candidate_original_idx = candidate_exam.name
+
+            # Swap rooms
+            original_room = scheduler.schedule_df.at[misplaced_original_idx, 'Room']
+            candidate_room = scheduler.schedule_df.at[candidate_original_idx, 'Room']
+            
+            scheduler.schedule_df.at[misplaced_original_idx, 'Room'] = candidate_room
+            scheduler.schedule_df.at[candidate_original_idx, 'Room'] = original_room
+
+            logging.info(f"SWAP SUCCESSFUL: Section {misplaced_exam['Section']} (needs IT lab) moved to room {candidate_room}. "
+                         f"Section {candidate_exam['Section']} moved to room {original_room}.")
+        else:
+            logging.warning(f"SWAP FAILED: No suitable swap candidate found for section {misplaced_exam['Section']} "
+                            f"at {misplaced_exam['Date']} {misplaced_exam['Time_Slot']}.")
 
 
 def resolve_conflicts_by_moving_groups(scheduler, session_id, max_moves=15):
