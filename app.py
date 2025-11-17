@@ -1205,7 +1205,7 @@ def get_conflict_report():
         "conflicts": conflicts
     }
 
-    return jsonify(report)
+    return jsonify(handle_nan_values(report))
 
 
 @app.route('/api/resolve-conflicts-by-group', methods=['POST'])

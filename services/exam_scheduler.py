@@ -4,7 +4,7 @@ import random
 import re
 import statistics
 import traceback
-from collections import defaultdict
+from collections import defaultdict, Counter
 from itertools import combinations
 
 
@@ -362,6 +362,11 @@ class ExamScheduler:
         else:
             self.room_types = {room: 'regular' for room in self.rooms}
             logging.warning("Колонка 'Type' не найдена в файле аудиторий. Все аудитории считаются 'regular'.")
+
+        room_type_counts = Counter(self.room_types.values())
+        logging.info("Сводка по типам аудиторий:")
+        for room_type, count in room_type_counts.items():
+            logging.info(f"  - Тип: {room_type}, Количество: {count}")
         
         self.all_students_dict = self.exams_df[['fake_id', 'fake_name']].drop_duplicates().to_dict('records')
         self.exam_groups["Duration"] = 180  # Дефолтная длительность
@@ -1010,8 +1015,15 @@ class ExamScheduler:
             if self.room_types.get(r, 'regular') == classroom_type
         ]
 
+        if not typed_available_rooms and classroom_type == 'regular':
+            logging.info(f"Не найдено свободных аудиторий типа 'regular', пробую найти 'it_lab'.")
+            typed_available_rooms = [
+                r for r in available_rooms
+                if self.room_types.get(r, 'regular') == 'it_lab'
+            ]
+
         if not typed_available_rooms:
-            logging.warning(f"Не найдено свободных аудиторий типа '{classroom_type}' для экзамена.")
+            logging.warning(f"Не найдено свободных аудиторий типа '{classroom_type}' для экзамена (включая резервные).")
             return None, []
 
         final_room_str = None
@@ -1552,7 +1564,6 @@ class ExamScheduler:
                 if str(exclusion.room_number) == str(room):
                     # Check for time overlap: (StartA < EndB) and (EndA > StartB)
                     if max(start_dt, exclusion.start_time) < min(end_dt, exclusion.end_time):
-                        logging.info(f"Room {room} is excluded on {day_date} from {exclusion.start_time.time()} to {exclusion.end_time.time()} due to '{exclusion.reason}'. Exam time: {start_dt.time()}-{end_dt.time()}")
                         return True  # The room is excluded
         return False
 
