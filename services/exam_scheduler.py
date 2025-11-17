@@ -1007,48 +1007,97 @@ class ExamScheduler:
             session.close()
 
     def _find_suitable_rooms(self, available_rooms, num_students, two_rooms_needed, classroom_type='regular'):
-        """Finds suitable rooms for a given exam group, considering the classroom type."""
-        
-        # Filter rooms by the required type
+        """
+        Находит подходящие аудитории для экзаменационной группы.
+        - Для обычных экзаменов: ищет одну аудиторию.
+        - Для two_rooms_needed=true: принудительно ищет две аудитории, отдавая предпочтение близким.
+        """
+        # Фильтруем аудитории по требуемому типу
         typed_available_rooms = [
-            r for r in available_rooms 
+            r for r in available_rooms
             if self.room_types.get(r, 'regular') == classroom_type
         ]
 
+        # Резервный вариант: если нужны 'regular', но их нет, пробуем 'it_lab'
         if not typed_available_rooms and classroom_type == 'regular':
-            logging.info(f"Не найдено свободных аудиторий типа 'regular', пробую найти 'it_lab'.")
+            logging.info("Не найдено свободных аудиторий типа 'regular', пробую найти 'it_lab'.")
             typed_available_rooms = [
                 r for r in available_rooms
                 if self.room_types.get(r, 'regular') == 'it_lab'
             ]
 
         if not typed_available_rooms:
-            logging.warning(f"Не найдено свободных аудиторий типа '{classroom_type}' для экзамена (включая резервные).")
+            logging.warning(f"Не найдено свободных аудиторий типа '{classroom_type}' для экзамена.")
             return None, []
 
-        final_room_str = None
-        rooms_to_book = []
+        required_capacity = num_students
+
         if not two_rooms_needed:
-            room_107 = '107'
-            if room_107 in typed_available_rooms and self.room_capacities.get(room_107, 0) >= num_students:
-                final_room_str = room_107
-                rooms_to_book.append(final_room_str)
+            # Стандартная логика для одной аудитории
+            suitable_rooms = [r for r in typed_available_rooms if self.room_capacities.get(r, 0) >= required_capacity]
+            if not suitable_rooms:
+                return None, []
+
+            # Отдаем предпочтение аудиториям не '107', если есть выбор
+            non_107_rooms = [r for r in suitable_rooms if str(r) != '107']
+            if non_107_rooms:
+                # Выбираем аудиторию с минимальной подходящей вместимостью
+                best_room = min(non_107_rooms, key=lambda r: self.room_capacities.get(r, 0))
             else:
-                suitable_rooms = [r for r in typed_available_rooms if self.room_capacities.get(r, 0) >= num_students and r != room_107]
-                if suitable_rooms:
-                    final_room_str = min(suitable_rooms, key=lambda r: self.room_capacities.get(r, 0))
-                    rooms_to_book.append(final_room_str)
+                # Если подходит только '107' или другие специфичные аудитории
+                best_room = min(suitable_rooms, key=lambda r: self.room_capacities.get(r, 0))
+            
+            return str(best_room), [str(best_room)]
         else:
+            # --- Логика для two_rooms_needed: ПРИНУДИТЕЛЬНЫЙ ПОИСК ДВУХ АУДИТОРИЙ ---
+
+            logging.info(f"Принудительный поиск пары аудиторий для {required_capacity} мест (two_rooms_needed=True).")
+
+            def get_room_num(room_str):
+                try:
+                    return int(''.join(filter(str.isdigit, str(room_str))))
+                except (ValueError, TypeError):
+                    return 0
+
             room_pairs = list(combinations(typed_available_rooms, 2))
             suitable_pairs = [
-                pair for pair in room_pairs
-                if self.room_capacities.get(str(pair[0]), 0) + self.room_capacities.get(str(pair[1]), 0) >= num_students
+                p for p in room_pairs
+                if self.room_capacities.get(str(p[0]), 0) + self.room_capacities.get(str(p[1]), 0) >= required_capacity
             ]
-            if suitable_pairs:
-                best_pair = min(suitable_pairs, key=lambda p: self.room_capacities.get(str(p[0]), 0) + self.room_capacities.get(str(p[1]), 0))
-                final_room_str = f"{best_pair[0]},{best_pair[1]}"
-                rooms_to_book.extend(best_pair)
-        return final_room_str, rooms_to_book
+
+            if not suitable_pairs:
+                logging.warning(f"Не найдено подходящей пары аудиторий для вместимости {required_capacity}.")
+                return None, []
+
+            # Оцениваем и сортируем пары по близости
+            scored_pairs = []
+            for pair in suitable_pairs:
+                room1_str, room2_str = str(pair[0]), str(pair[1])
+                num1, num2 = get_room_num(room1_str), get_room_num(room2_str)
+
+                # Метрика 1: На одном ли этаже (0 - да, 1 - нет)
+                floor1 = int(str(num1)[0]) if num1 >= 100 else -1
+                floor2 = int(str(num2)[0]) if num2 >= 100 else -2
+                same_floor_score = 0 if floor1 == floor2 else 1
+
+                # Метрика 2: Разница номеров
+                room_diff = abs(num1 - num2)
+
+                # Метрика 3: Суммарная вместимость (для выбора самой экономной пары)
+                total_capacity = self.room_capacities.get(room1_str, 0) + self.room_capacities.get(room2_str, 0)
+
+                scored_pairs.append(((room1_str, room2_str), same_floor_score, room_diff, total_capacity))
+
+            # Сортировка: сначала по этажу, потом по разнице номеров, потом по вместимости
+            scored_pairs.sort(key=lambda x: (x[1], x[2], x[3]))
+
+            best_pair_tuple = scored_pairs[0][0]
+            logging.info(f"Найдена лучшая пара аудиторий: {best_pair_tuple} (Этаж-скор: {scored_pairs[0][1]}, Разница: {scored_pairs[0][2]})")
+            
+            final_room_str = f"{best_pair_tuple[0]},{best_pair_tuple[1]}"
+            rooms_to_book = list(best_pair_tuple)
+            
+            return final_room_str, rooms_to_book
 
     def _book_slot(self, day_str, start_block, total_blocks_needed, rooms_to_book, num_blocks_in_day):
         """Marks the given rooms as booked in the availability grid."""
@@ -1165,6 +1214,8 @@ class ExamScheduler:
                     students = self.exams_df[self.exams_df['Section'] == group['Section']]['fake_id'].tolist()
                     num_students = len(students)
                     duration_minutes, instructor, two_rooms_needed = int(group.get('Duration', 180)), group['Instructor'], group.get('two_rooms_needed', False)
+                    if two_rooms_needed:
+                        num_students *= 2
                     exam_blocks = math.ceil(duration_minutes / time_step_minutes)
                     buffer_blocks = math.ceil(buffer_minutes / time_step_minutes)
                     total_blocks_needed = exam_blocks + buffer_blocks
@@ -1211,6 +1262,8 @@ class ExamScheduler:
                         students = self.exams_df[self.exams_df['Section'] == group['Section']]['fake_id'].tolist()
                         num_students = len(students)
                         duration_minutes, instructor, two_rooms_needed = int(group.get('Duration', 180)), group['Instructor'], group.get('two_rooms_needed', False)
+                        if two_rooms_needed:
+                            num_students *= 2
                         exam_blocks = math.ceil(duration_minutes / time_step_minutes)
                         buffer_blocks = math.ceil(buffer_minutes / time_step_minutes)
                         total_blocks_needed = exam_blocks + buffer_blocks
@@ -1422,6 +1475,9 @@ class ExamScheduler:
         num_students = len(students)
         instructor = exam_rec['Instructor']
         two_rooms_needed = exam_rec.get('two_rooms_needed', False)
+
+        if two_rooms_needed:
+            num_students *= 2
         
         possible_starts = list(range(num_blocks_in_day - total_blocks_needed + 1))
         random.shuffle(possible_starts)
