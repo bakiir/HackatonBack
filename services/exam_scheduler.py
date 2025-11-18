@@ -1075,8 +1075,23 @@ class ExamScheduler:
             best_room = min(suitable_rooms, key=lambda r: self.room_capacities.get(r, 0))
             return str(best_room), [str(best_room)]
         else:
-            # --- Логика для two_rooms_needed: ПРИНУДИТЕЛЬНЫЙ ПОИСК ДВУХ АУДИТОРИЙ ---
-            logging.info(f"Принудительный поиск пары аудиторий для {required_capacity} мест (two_rooms_needed=True).")
+            # --- Логика для two_rooms_needed ---
+            # Сначала пытаемся найти одну большую аудиторию
+            logging.info(f"Требуется две аудитории. Сначала ищем одну большую аудиторию вместимостью >= {required_capacity}.")
+            
+            single_large_rooms = [
+                r for r in typed_available_rooms
+                if self.room_capacities.get(r, 0) >= required_capacity
+            ]
+
+            if single_large_rooms:
+                # Если найдена одна большая аудитория, выбираем лучшую (наименьшую из подходящих)
+                best_single_room = min(single_large_rooms, key=lambda r: self.room_capacities.get(r, 0))
+                logging.info(f"Найдена одна большая аудитория: {best_single_room}. Используем ее вместо двух маленьких.")
+                return str(best_single_room), [str(best_single_room)]
+
+            # Если одна большая аудитория не найдена, ищем пару
+            logging.info(f"Большая аудитория не найдена. Продолжаем принудительный поиск пары аудиторий для {required_capacity} мест.")
 
             def get_room_num(room_str):
                 try:
