@@ -341,10 +341,12 @@ class ExamScheduler:
         self.exam_groups["Proctor_Needed"] = False  # По умолчанию проктор не требуется
         self.exam_groups['has_exam'] = True
 
-        # Нормализация списка комнат
-        self.rooms = list(self.rooms_df['Аудитория'].astype(str).str.strip())
+        # Нормализация списка комнат и исключение ауд. 107
+        all_rooms = list(self.rooms_df['Аудитория'].astype(str).str.strip())
+        self.rooms = [r for r in all_rooms if str(r) != '107']
+        logging.info("Аудитория '107' исключена из автоматического планирования.")
 
-        logging.info(f"Загружено комнат: {len(self.rooms)}")
+        logging.info(f"Загружено комнат для авто-планирования: {len(self.rooms)}")
         logging.info(f"Пример комнат: {self.rooms[:5]}")  # Логируем первые 5 комнат для проверки
 
         self.room_capacities = dict(zip(
@@ -538,6 +540,8 @@ class ExamScheduler:
         self.custom_dates = self._generate_initial_dates()
 
     def _schedule_large_groups_in_107(self, exam_groups_df):
+        logging.info("Приоритетное планирование для ауд. 107 отключено. Все назначения в эту аудиторию должны производиться вручную.")
+        return exam_groups_df, 0
         from create_db import ClassroomSlot, Session
         import json
 
@@ -1012,6 +1016,7 @@ class ExamScheduler:
         - Для обычных экзаменов: ищет одну аудиторию.
         - Для two_rooms_needed=true: принудительно ищет две аудитории, отдавая предпочтение близким.
         """
+        logging.info(f"Поиск аудитории. Требования: two_rooms_needed={two_rooms_needed}, тип='{classroom_type}', необх. вместимость={num_students}.")
         # Фильтруем аудитории по требуемому типу
         typed_available_rooms = [
             r for r in available_rooms

@@ -804,7 +804,7 @@ def handle_management():
             current_scheduler.create_schedule()
 
             # Resolve IT lab conflicts
-            resolve_it_lab_conflicts(current_scheduler)
+            # resolve_it_lab_conflicts(current_scheduler)
 
             # Analyze failed sections
             analysis_report = current_scheduler.analyze_failed_sections_details()
