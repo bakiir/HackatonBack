@@ -341,12 +341,10 @@ class ExamScheduler:
         self.exam_groups["Proctor_Needed"] = False  # По умолчанию проктор не требуется
         self.exam_groups['has_exam'] = True
 
-        # Нормализация списка комнат и исключение ауд. 107
-        all_rooms = list(self.rooms_df['Аудитория'].astype(str).str.strip())
-        self.rooms = [r for r in all_rooms if str(r) != '107']
-        logging.info("Аудитория '107' исключена из автоматического планирования.")
+        # Нормализация списка комнат
+        self.rooms = list(self.rooms_df['Аудитория'].astype(str).str.strip())
 
-        logging.info(f"Загружено комнат для авто-планирования: {len(self.rooms)}")
+        logging.info(f"Загружено комнат: {len(self.rooms)}")
         logging.info(f"Пример комнат: {self.rooms[:5]}")  # Логируем первые 5 комнат для проверки
 
         self.room_capacities = dict(zip(
@@ -540,20 +538,36 @@ class ExamScheduler:
         self.custom_dates = self._generate_initial_dates()
 
     def _schedule_large_groups_in_107(self, exam_groups_df):
-        logging.info("Приоритетное планирование для ауд. 107 отключено. Все назначения в эту аудиторию должны производиться вручную.")
-        return exam_groups_df, 0
         from create_db import ClassroomSlot, Session
         import json
 
         logging.info("Запуск приоритетного планирования для аудитории 107.")
+
+        # --- Новое правило: Только для "письменных" экзаменов ---
+        written_exam_mask = (
+            (exam_groups_df['has_exam'] == True) &
+            (exam_groups_df['proctor_needed'] == True) &
+            (exam_groups_df['two_rooms_needed'] == True)
+        )
+        
+        # Разделяем на письменные и все остальные
+        written_exams_to_process = exam_groups_df[written_exam_mask].copy()
+        other_exams = exam_groups_df[~written_exam_mask]
+
+        if written_exams_to_process.empty:
+            logging.info("Не найдено 'письменных' экзаменов, подходящих для приоритетного планирования в ауд. 107.")
+            return exam_groups_df, 0  # Возвращаем исходный DF без изменений
+
+        logging.info(f"Найдено {len(written_exams_to_process)} 'письменных' секций для рассмотрения в ауд. 107.")
+        
         session = Session()
         try:
-            # 1. Найти подходящие группы для объединения
-            exam_groups_df['student_count'] = exam_groups_df['Section'].map(
+            # 1. Найти подходящие группы для объединения (работаем только с письменными)
+            written_exams_to_process['student_count'] = written_exams_to_process['Section'].map(
                 lambda x: len(self.exams_df[self.exams_df['Section'] == x])
             )
             
-            subject_groups = exam_groups_df.groupby('Subject').agg(
+            subject_groups = written_exams_to_process.groupby('Subject').agg(
                 total_students=('student_count', 'sum'),
                 section_count=('Section', 'count'),
                 sections=('Section', lambda x: list(x))
@@ -566,7 +580,7 @@ class ExamScheduler:
             ].sort_values('total_students', ascending=False)
 
             if candidates.empty:
-                logging.info("Не найдено подходящих групп для приоритетного планирования в ауд. 107.")
+                logging.info("Не найдено подходящих групп 'письменных' экзаменов для приоритетного планирования в ауд. 107.")
                 return exam_groups_df, 0
 
             # 2. Получить свободные слоты из БД
@@ -585,7 +599,6 @@ class ExamScheduler:
             for _, candidate_row in candidates.iterrows():
                 sections_to_schedule = candidate_row['sections']
                 
-                # Пропускаем, если какая-то из секций уже запланирована
                 if any(s in scheduled_sections for s in sections_to_schedule):
                     continue
 
@@ -594,12 +607,10 @@ class ExamScheduler:
                     section_students = set(self.exams_df[self.exams_df['Section'] == section_id]['fake_id'])
                     all_students_in_group.update(section_students)
 
-                # Ищем подходящий слот
                 for slot in free_slots:
                     if slot.is_booked:
                         continue
 
-                    # Проверка конфликтов студентов
                     has_conflict = False
                     slot_date_str = slot.start_time.strftime('%Y-%m-%d')
                     for student in all_students_in_group:
@@ -612,9 +623,8 @@ class ExamScheduler:
                             break
                     
                     if has_conflict:
-                        continue # Переходим к следующему слоту
+                        continue
 
-                    # Если конфликтов нет, бронируем слот
                     slot.is_booked = True
                     slot.booked_groups_info = json.dumps({
                         'subject': candidate_row['Subject'],
@@ -623,9 +633,8 @@ class ExamScheduler:
                     
                     base_time_slot = f"{slot.start_time.strftime('%H:%M')}-{slot.end_time.strftime('%H:%M')}"
 
-                    # Создаем записи в расписании для каждой секции
                     for section_id in sections_to_schedule:
-                        group_info = exam_groups_df[exam_groups_df['Section'] == section_id].iloc[0]
+                        group_info = written_exams_to_process[written_exams_to_process['Section'] == section_id].iloc[0]
                         num_students = group_info['student_count']
                         
                         exam_record = {
@@ -644,7 +653,6 @@ class ExamScheduler:
                         }
                         self.schedule.append(exam_record)
 
-                        # Обновляем расписание студентов
                         section_students_list = self.exams_df[self.exams_df['Section'] == section_id]['fake_id'].tolist()
                         for student in section_students_list:
                             if student not in self.student_exams:
@@ -656,18 +664,21 @@ class ExamScheduler:
 
                     logging.info(f"Аудитория 107 забронирована для предмета '{candidate_row['Subject']}' ({len(sections_to_schedule)} секции) на {slot_date_str} {base_time_slot}")
                     
-                    # Удаляем слот из списка доступных, чтобы не использовать его снова
                     free_slots.remove(slot)
-                    break # Переходим к следующей группе кандидатов
+                    break
 
             session.commit()
             
-            # 4. Возвращаем обновленный DataFrame без запланированных секций
-            remaining_groups_df = exam_groups_df[~exam_groups_df['Section'].isin(scheduled_sections)].copy()
-            remaining_groups_df = remaining_groups_df.drop(columns=['student_count']) # Удаляем временную колонку
+            # 4. Возвращаем DataFrame, объединив нераспределенные письменные и все остальные экзамены
+            remaining_written_exams = written_exams_to_process[~written_exams_to_process['Section'].isin(scheduled_sections)]
+            final_remaining_df = pd.concat([remaining_written_exams, other_exams], ignore_index=True)
+            
+            # Удаляем временную колонку, если она есть
+            if 'student_count' in final_remaining_df.columns:
+                final_remaining_df = final_remaining_df.drop(columns=['student_count'])
             
             logging.info(f"Завершено приоритетное планирование. Запланировано секций в ауд. 107: {scheduled_count}")
-            return remaining_groups_df, scheduled_count
+            return final_remaining_df, scheduled_count
 
         except Exception as e:
             logging.error(f"Ошибка в приоритетном планировании для ауд. 107: {traceback.format_exc()}")
@@ -1010,13 +1021,31 @@ class ExamScheduler:
         finally:
             session.close()
 
-    def _find_suitable_rooms(self, available_rooms, num_students, two_rooms_needed, classroom_type='regular'):
+    def _find_suitable_rooms(self, available_rooms, num_students, group_info, classroom_type='regular'):
         """
-        Находит подходящие аудитории для экзаменационной группы.
-        - Для обычных экзаменов: ищет одну аудиторию.
-        - Для two_rooms_needed=true: принудительно ищет две аудитории, отдавая предпочтение близким.
+        Находит подходящие аудитории для экзаменационной группы, применяя специальные ограничения.
         """
-        logging.info(f"Поиск аудитории. Требования: two_rooms_needed={two_rooms_needed}, тип='{classroom_type}', необх. вместимость={num_students}.")
+        # Извлекаем флаги из group_info
+        two_rooms_needed = group_info.get('two_rooms_needed', False)
+        has_exam = group_info.get('has_exam', True)
+        proctor_needed = group_info.get('proctor_needed', False)
+
+        logging.info(f"Поиск аудитории для секции {group_info.get('Section', '')}. Требования: two_rooms={two_rooms_needed}, proctor={proctor_needed}, has_exam={has_exam}, тип='{classroom_type}', вместимость={num_students}.")
+
+        # --- Ограничение на аудитории для экзаменов без проктора ---
+        forbidden_rooms = {'319', '333', '419', '433', '436', '526', '536', '338/1', '334/1'}
+        if (two_rooms_needed is False and has_exam is True and proctor_needed is False):
+            original_room_count = len(available_rooms)
+            available_rooms = [r for r in available_rooms if str(r) not in forbidden_rooms]
+            if len(available_rooms) < original_room_count:
+                logging.info(f"Применены ограничения на аудитории (экзамен без проктора). Исключены: {forbidden_rooms}")
+
+        # --- Ограничение для аудитории 107 (только для "письменных" экзаменов) ---
+        is_written_exam = (two_rooms_needed is True and proctor_needed is True and has_exam is True)
+        if not is_written_exam and '107' in available_rooms:
+            logging.info("Аудитория 107 доступна только для 'письменных' экзаменов. Исключаем ее для данной секции.")
+            available_rooms = [r for r in available_rooms if str(r) != '107']
+
         # Фильтруем аудитории по требуемому типу
         typed_available_rooms = [
             r for r in available_rooms
@@ -1042,20 +1071,11 @@ class ExamScheduler:
             suitable_rooms = [r for r in typed_available_rooms if self.room_capacities.get(r, 0) >= required_capacity]
             if not suitable_rooms:
                 return None, []
-
-            # Отдаем предпочтение аудиториям не '107', если есть выбор
-            non_107_rooms = [r for r in suitable_rooms if str(r) != '107']
-            if non_107_rooms:
-                # Выбираем аудиторию с минимальной подходящей вместимостью
-                best_room = min(non_107_rooms, key=lambda r: self.room_capacities.get(r, 0))
-            else:
-                # Если подходит только '107' или другие специфичные аудитории
-                best_room = min(suitable_rooms, key=lambda r: self.room_capacities.get(r, 0))
             
+            best_room = min(suitable_rooms, key=lambda r: self.room_capacities.get(r, 0))
             return str(best_room), [str(best_room)]
         else:
             # --- Логика для two_rooms_needed: ПРИНУДИТЕЛЬНЫЙ ПОИСК ДВУХ АУДИТОРИЙ ---
-
             logging.info(f"Принудительный поиск пары аудиторий для {required_capacity} мест (two_rooms_needed=True).")
 
             def get_room_num(room_str):
@@ -1079,23 +1099,14 @@ class ExamScheduler:
             for pair in suitable_pairs:
                 room1_str, room2_str = str(pair[0]), str(pair[1])
                 num1, num2 = get_room_num(room1_str), get_room_num(room2_str)
-
-                # Метрика 1: На одном ли этаже (0 - да, 1 - нет)
                 floor1 = int(str(num1)[0]) if num1 >= 100 else -1
                 floor2 = int(str(num2)[0]) if num2 >= 100 else -2
                 same_floor_score = 0 if floor1 == floor2 else 1
-
-                # Метрика 2: Разница номеров
                 room_diff = abs(num1 - num2)
-
-                # Метрика 3: Суммарная вместимость (для выбора самой экономной пары)
                 total_capacity = self.room_capacities.get(room1_str, 0) + self.room_capacities.get(room2_str, 0)
-
                 scored_pairs.append(((room1_str, room2_str), same_floor_score, room_diff, total_capacity))
 
-            # Сортировка: сначала по этажу, потом по разнице номеров, потом по вместимости
             scored_pairs.sort(key=lambda x: (x[1], x[2], x[3]))
-
             best_pair_tuple = scored_pairs[0][0]
             logging.info(f"Найдена лучшая пара аудиторий: {best_pair_tuple} (Этаж-скор: {scored_pairs[0][1]}, Разница: {scored_pairs[0][2]})")
             
@@ -1216,6 +1227,7 @@ class ExamScheduler:
                 logging.info(f"--- Этап 1: Строгое планирование для {len(groups_to_schedule)} секций ---")
                 hard_to_schedule_groups = []
                 for _, group in groups_to_schedule.iterrows():
+                    logging.info(f"Обработка секции: {group['Section']}, has_exam={group.get('has_exam')}, proctor_needed={group.get('proctor_needed')}, two_rooms_needed={group.get('two_rooms_needed')}")
                     students = self.exams_df[self.exams_df['Section'] == group['Section']]['fake_id'].tolist()
                     num_students = len(students)
                     duration_minutes, instructor, two_rooms_needed = int(group.get('Duration', 180)), group['Instructor'], group.get('two_rooms_needed', False)
@@ -1245,7 +1257,7 @@ class ExamScheduler:
                             ]
                             
                             classroom_type = group.get('classroom_type', 'regular')
-                            final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed, classroom_type)
+                            final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, group.to_dict(), classroom_type)
                             if final_room_str:
                                 possible_slots.append({'day_str': day_str, 'start_block': start_block, 'time_slot_str': exam_time_slot_str, 'room_str': final_room_str, 'rooms_to_book': rooms_to_book})
                     
@@ -1264,6 +1276,7 @@ class ExamScheduler:
                 if hard_to_schedule_groups:
                     logging.info(f"--- Этап 2: Гибкое планирование для {len(hard_to_schedule_groups)} сложных секций ---")
                     for group in hard_to_schedule_groups:
+                        logging.info(f"Обработка секции: {group['Section']}, has_exam={group.get('has_exam')}, proctor_needed={group.get('proctor_needed')}, two_rooms_needed={group.get('two_rooms_needed')}")
                         students = self.exams_df[self.exams_df['Section'] == group['Section']]['fake_id'].tolist()
                         num_students = len(students)
                         duration_minutes, instructor, two_rooms_needed = int(group.get('Duration', 180)), group['Instructor'], group.get('two_rooms_needed', False)
@@ -1292,7 +1305,7 @@ class ExamScheduler:
                                 ]
 
                                 classroom_type = group.get('classroom_type', 'regular')
-                                final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed, classroom_type)
+                                final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, group.to_dict(), classroom_type)
                                 if final_room_str:
                                     possible_slots.append({'day_str': day_str, 'start_block': start_block, 'time_slot_str': exam_time_slot_str, 'room_str': final_room_str, 'rooms_to_book': rooms_to_book, 'conflicts': conflicts})
 
@@ -1508,7 +1521,7 @@ class ExamScheduler:
             ]
 
             classroom_type = exam_rec.get('classroom_type', 'regular')
-            final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, two_rooms_needed, classroom_type)
+            final_room_str, rooms_to_book = self._find_suitable_rooms(available_rooms, num_students, exam_rec, classroom_type)
 
             if final_room_str:
                 return {'Date': day_str, 'Time_Slot': exam_time_slot_str, 'Room': final_room_str, 'start_block': start_block, 'rooms_to_book': rooms_to_book}
