@@ -262,86 +262,90 @@ def book_slot():
         data = request.json
         bookings = data if isinstance(data, list) else [data]
         results = []
+        
+        all_slots_to_update_for_commit = []
 
         for booking_data in bookings:
             date_str = booking_data.get('date')
             start_time_str = booking_data.get('start_time')
             duration_minutes = booking_data.get('duration')
-
-            classroom_number = booking_data.get('classroom_number')
+            classroom_numbers_str = booking_data.get('classroom_number')
             subject = booking_data.get('subject')
             sections = booking_data.get('sections')
 
             # 1. Валидация входных данных
-            if not all([date_str, start_time_str, duration_minutes, classroom_number, subject, sections]):
-                results.append({'error': 'Missing required parameters'})
+            if not all([date_str, start_time_str, duration_minutes, classroom_numbers_str, subject, sections]):
+                results.append({'error': 'Missing required parameters', 'booking_data': booking_data})
                 continue
 
             if not isinstance(sections, list):
-                results.append({'error': '"sections" must be a list'})
+                results.append({'error': '"sections" must be a list', 'booking_data': booking_data})
                 continue
 
             try:
                 target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
                 start_time = datetime.strptime(start_time_str, '%H:%M').time()
-
                 booking_start_dt = datetime.combine(target_date, start_time)
                 booking_end_dt = booking_start_dt + timedelta(minutes=duration_minutes)
             except ValueError as ve:
-                results.append({'error': f'Invalid date or time format: {ve}'})
+                results.append({'error': f'Invalid date or time format: {ve}', 'booking_data': booking_data})
                 continue
 
-            # 2. Поиск всех слотов, которые нужно забронировать
-            slots_to_book = session.query(ClassroomSlot).filter(
-                ClassroomSlot.classroom_number == classroom_number,
-                ClassroomSlot.start_time >= booking_start_dt,
-                ClassroomSlot.start_time < booking_end_dt
-            ).all()
+            classroom_list = [room.strip() for room in str(classroom_numbers_str).split(',')]
+            
+            current_booking_slots = []
+            booking_has_error = False
 
-            # 3. Проверка, что все слоты существуют и свободны
-            if not slots_to_book:
-                results.append({'error': f'No slots found for the specified time range:{sections}'})
-                continue
+            for room_num in classroom_list:
+                if booking_has_error: break
 
-            required_slots_count = math.ceil(duration_minutes / 30)
-            if len(slots_to_book) != required_slots_count:
-                error_message = (
-                    f'The requested duration does not align with the available slot boundaries. '
-                    f'Required slots: {required_slots_count}, Found slots: {len(slots_to_book)} '
-                    f'for sections: {sections}.'
-                )
-                results.append({'error': error_message})
-                continue
+                # 2. Поиск всех слотов, которые нужно забронировать для данной аудитории
+                slots_to_book = session.query(ClassroomSlot).filter(
+                    ClassroomSlot.classroom_number == room_num,
+                    ClassroomSlot.start_time >= booking_start_dt,
+                    ClassroomSlot.start_time < booking_end_dt
+                ).all()
 
-            conflict = False
-            for slot in slots_to_book:
-                if slot.is_booked:
-                    results.append(
-                        {'error': f'Slot starting at {slot.start_time.strftime("%H:%M")} is already booked.for {sections}'})
-                    conflict = True
-                    break
+                # 3. Проверка, что все слоты существуют и свободны
+                if not slots_to_book:
+                    results.append({'error': f'No slots found for classroom {room_num} in the specified time range', 'sections': sections})
+                    booking_has_error = True
+                    continue
 
-            if conflict:
-                continue
+                required_slots_count = math.ceil(duration_minutes / 30)
+                if len(slots_to_book) != required_slots_count:
+                    error_message = (
+                        f'For classroom {room_num}, the requested duration does not align with available slot boundaries. '
+                        f'Required slots: {required_slots_count}, Found slots: {len(slots_to_book)}.'
+                    )
+                    results.append({'error': error_message, 'sections': sections})
+                    booking_has_error = True
+                    continue
 
-            # 4. Бронирование слотов
-            booking_info = json.dumps({
-                "subject": subject,
-                "sections": sections
-            }, ensure_ascii=False)
+                for slot in slots_to_book:
+                    if slot.is_booked:
+                        results.append({'error': f'Slot in classroom {room_num} at {slot.start_time.strftime("%H:%M")} is already booked', 'sections': sections})
+                        booking_has_error = True
+                        break
+                
+                if not booking_has_error:
+                    current_booking_slots.extend(slots_to_book)
 
-            for slot in slots_to_book:
-                slot.is_booked = True
-                slot.booked_groups_info = booking_info
+            if not booking_has_error:
+                all_slots_to_update_for_commit.extend(current_booking_slots)
+                
+                booking_info = json.dumps({"subject": subject, "sections": sections}, ensure_ascii=False)
+                for slot in current_booking_slots:
+                    slot.is_booked = True
+                    slot.booked_groups_info = booking_info
 
-            end_time_str = booking_end_dt.strftime("%H:%M")
-            results.append({
-                'status': 'success',
-                'message': f'Slots from {start_time_str} to {end_time_str} in classroom {classroom_number} successfully booked.'
-            })
-
-            logging.info(
-                f"Slots from {start_time_str} for {duration_minutes} mins in classroom {classroom_number} manually booked for subject '{subject}'.")
+                end_time_str = booking_end_dt.strftime("%H:%M")
+                results.append({
+                    'status': 'success',
+                    'message': f'Slots from {start_time_str} to {end_time_str} in classrooms {classroom_numbers_str} successfully prepared for booking.'
+                })
+                logging.info(
+                    f"Slots from {start_time_str} for {duration_minutes} mins in classrooms {classroom_numbers_str} prepared for booking for subject '{subject}'.")
 
         has_error = any('error' in res for res in results)
         if has_error:
@@ -349,6 +353,10 @@ def book_slot():
             return jsonify({'results': results}), 400
         else:
             session.commit()
+            # Update success messages after commit
+            for res in results:
+                if res.get('status') == 'success':
+                    res['message'] = res['message'].replace('prepared for booking', 'successfully booked')
             return jsonify({'results': results}), 200
 
     except Exception as e:
