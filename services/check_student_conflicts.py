@@ -66,6 +66,10 @@ def check_all_students_conflicts(scheduler):
                 if len(daily_exams_df) > 1:
                     # Проверяем все комбинации пар экзаменов в этот день
                     for exam1, exam2 in combinations(daily_exams_df.to_dict('records'), 2):
+                        # Пропускаем сравнение, если это один и тот же предмет
+                        if exam1['Subject'] == exam2['Subject']:
+                            continue
+
                         time_slot1 = exam1['Time_Slot']
                         time_slot2 = exam2['Time_Slot']
 
@@ -148,6 +152,10 @@ def get_student_conflicts(scheduler):
                     exam_records = daily_exams_df.to_dict('records')
                     # Проверяем все комбинации пар экзаменов
                     for exam1, exam2 in combinations(exam_records, 2):
+                        # Пропускаем сравнение, если это один и тот же предмет
+                        if exam1['Subject'] == exam2['Subject']:
+                            continue
+                            
                         if _check_overlap(exam1['Time_Slot'], exam2['Time_Slot']):
                             # Найден конфликт для этого студента в этот день
                             conflict_key = (student_id, date)

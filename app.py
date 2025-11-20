@@ -3,6 +3,7 @@ import math
 import threading
 from datetime import datetime, timedelta
 import traceback
+from io import BytesIO
 from venv import logger
 import bcrypt
 import requests
@@ -1183,6 +1184,45 @@ def export_schedule():
     return send_file(output_file, as_attachment=True)
 
 
+@app.route('/api/export/all-student-schedules')
+@admin_required("admin")
+def export_all_student_schedules():
+    global current_scheduler
+    if not current_scheduler:
+        return jsonify({'error': 'Планировщик не инициализирован'}), 400
+
+    try:
+        # 1. Get the data as a DataFrame
+        student_schedules_df = current_scheduler.get_all_student_schedules_data()
+
+        if student_schedules_df.empty:
+            return jsonify({'message': 'Нет данных для экспорта.'}), 404
+
+        # 2. Create an in-memory Excel file
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            student_schedules_df.to_excel(writer, index=False, sheet_name='Расписание студентов')
+            # Auto-adjust columns width
+            for column in student_schedules_df:
+                column_length = max(student_schedules_df[column].astype(str).map(len).max(), len(column))
+                col_idx = student_schedules_df.columns.get_loc(column)
+                writer.sheets['Расписание студентов'].set_column(col_idx, col_idx, column_length + 1)
+
+        output.seek(0)
+
+        # 3. Send the file
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name='student_schedules.xlsx'
+        )
+
+    except Exception as e:
+        logging.error(f"Ошибка при экспорте расписания студентов: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/report/conflicts', methods=['GET'])
 def get_conflict_report():
     global current_scheduler
@@ -1209,6 +1249,11 @@ def get_conflict_report():
 
     # Conflicts
     conflicts = get_student_conflicts(current_scheduler)
+
+    # Группируем последовательные слоты для каждого конфликта
+    for conflict in conflicts:
+        if 'exams' in conflict and isinstance(conflict['exams'], list):
+            conflict['exams'] = group_consecutive_slots(conflict['exams'])
 
     report = {
         "scheduled": scheduled_str,
