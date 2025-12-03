@@ -806,6 +806,38 @@ class ExamScheduler:
             valid_proctors = [p for p in proctors if p in available_proctors]
             logging.info(f"{faculty}: {len(valid_proctors)} прокторов, {faculty_exams.get(faculty, 0)} мест для прокторов")
 
+        # --- Calculate availability score for each proctor ---
+        logging.info("Calculating proctor availability scores...")
+        proctor_availability = defaultdict(int)
+        exams_to_proctor_df = self.schedule_df[self.schedule_df['proctor_needed'] == True].copy()
+        proctor_to_faculties = defaultdict(list)
+        if hasattr(self, 'faculty_proctors') and self.faculty_proctors:
+            for faculty, proctors in self.faculty_proctors.items():
+                for proctor in proctors:
+                    proctor_to_faculties[proctor].append(faculty)
+        sct_proctor_set = set(sct_proctors)
+
+        for proctor in available_proctors:
+            is_sct_proctor = proctor in sct_proctor_set
+            for _, row in exams_to_proctor_df.iterrows():
+                subject = row['Subject']
+                is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
+                
+                eligible = False
+                if is_sct_subject:
+                    if is_sct_proctor:
+                        eligible = True
+                else:  # not an SCT subject
+                    if not is_sct_proctor:
+                        exam_faculties = self.subject_faculty_map.get(subject, set())
+                        proctor_faculties = set(proctor_to_faculties.get(proctor, []))
+                        if not exam_faculties.intersection(proctor_faculties):
+                            eligible = True
+                
+                if eligible:
+                    proctor_availability[proctor] += 1
+        logging.info("Finished calculating availability scores.")
+
         # Используем единый словарь для отслеживания нагрузки всех прокторов
         proctor_load = {proctor: 0 for proctor in available_proctors}
         proctor_schedule = {}
@@ -860,7 +892,8 @@ class ExamScheduler:
                     logging.error(f"Недостаточно свободных прокторов для {section_id}: требуется {num_proctors}, доступно {len(available)}")
                     raise ValueError(f"Недостаточно свободных прокторов для {section_id}")
 
-                available.sort(key=lambda p: proctor_load.get(p, 0))
+                # Sort by load, then by availability (preferring less available proctors)
+                available.sort(key=lambda p: (proctor_load.get(p, 0), proctor_availability.get(p, 0)))
                 assigned = available[:num_proctors]
 
                 for proctor in assigned:
