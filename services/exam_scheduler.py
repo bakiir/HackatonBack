@@ -892,12 +892,13 @@ class ExamScheduler:
                     logging.error(f"Недостаточно свободных прокторов для {section_id}: требуется {num_proctors}, доступно {len(available)}")
                     raise ValueError(f"Недостаточно свободных прокторов для {section_id}")
 
-                # Sort by load, then by availability (preferring less available proctors)
-                available.sort(key=lambda p: (proctor_load.get(p, 0), proctor_availability.get(p, 0)))
+                # Sort by load, then by descending availability (to use generalists first), then randomly
+                available.sort(key=lambda p: (proctor_load.get(p, 0), -proctor_availability.get(p, 0), random.random()))
                 assigned = available[:num_proctors]
 
+                exam_duration_hours = row.get('Duration', 180) / 60
                 for proctor in assigned:
-                    proctor_load[proctor] = proctor_load.get(proctor, 0) + 1
+                    proctor_load[proctor] = proctor_load.get(proctor, 0) + exam_duration_hours
                     if proctor_load[proctor] >= MAX_PROCTOR_LOAD:
                         logging.warning(f"Проктор {proctor} достиг максимальной нагрузки.")
                     proctor_schedule.setdefault(slot_key, []).append(proctor)
@@ -927,12 +928,13 @@ class ExamScheduler:
                 continue
             
             proctors = [p.strip() for p in proctors_str.split(',')]
+            exam_duration_hours = row.get('Duration', 180) / 60
             for proctor in proctors:
                 if proctor:
-                    final_proctor_load[proctor] += 1
+                    final_proctor_load[proctor] += exam_duration_hours
 
         # --- Logging based on authoritative count ---
-        logging.info("Статистика по нагрузке на прокторов (на основе финального расписания):")
+        logging.info("Статистика по нагрузке на прокторов (в часах, на основе финального расписания):")
         if hasattr(self, 'faculty_proctors') and self.faculty_proctors:
             for faculty, proctors_in_faculty in self.faculty_proctors.items():
                 faculty_loads = {p: final_proctor_load.get(p, 0) for p in proctors_in_faculty}
@@ -946,8 +948,8 @@ class ExamScheduler:
                 least_loaded_proctor = min(active_faculty_loads, key=active_faculty_loads.get)
 
                 logging.info(f"  - {faculty}:")
-                logging.info(f"    - Самый загруженный: {most_loaded_proctor} (нагрузка: {active_faculty_loads[most_loaded_proctor]})")
-                logging.info(f"    - Самый незагруженный: {least_loaded_proctor} (нагрузка: {active_faculty_loads[least_loaded_proctor]})")
+                logging.info(f"    - Самый загруженный: {most_loaded_proctor} (нагрузка (часы): {active_faculty_loads[most_loaded_proctor]:.2f})")
+                logging.info(f"    - Самый незагруженный: {least_loaded_proctor} (нагрузка (часы): {active_faculty_loads[least_loaded_proctor]:.2f})")
         else:
             logging.warning("Атрибут 'faculty_proctors' не найден, статистика по школам не может быть отображена.")
 
