@@ -822,7 +822,7 @@ class ExamScheduler:
             for _, row in exams_to_proctor_df.iterrows():
                 subject = row['Subject']
                 is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
-                
+
                 eligible = False
                 if is_sct_subject:
                     if is_sct_proctor:
@@ -833,81 +833,90 @@ class ExamScheduler:
                         proctor_faculties = set(proctor_to_faculties.get(proctor, []))
                         if not exam_faculties.intersection(proctor_faculties):
                             eligible = True
-                
+
                 if eligible:
                     proctor_availability[proctor] += 1
         logging.info("Finished calculating availability scores.")
 
-        # Используем единый словарь для отслеживания нагрузки всех прокторов
+        # --- New Grouping-Based Proctor Assignment ---
         proctor_load = {proctor: 0 for proctor in available_proctors}
-        proctor_schedule = {}
-        room_proctor_assignment = {}
-
+        proctor_schedule = {}  # Tracks busy proctors for a given (date, time_slot)
         MAX_PROCTOR_LOAD = 100
 
-        shuffled_schedule = self.schedule_df.sample(frac=1)
-
-        for _, row in shuffled_schedule.iterrows():
+        # Handle sections that don't need proctors first
+        no_proctor_df = self.schedule_df[self.schedule_df['proctor_needed'] != True]
+        for _, row in no_proctor_df.iterrows():
             section_id = row['Section']
-            subject = row['Subject']
-            exam_date = row['Date']
-            time_slot = row['Time_Slot'].strip()
-            room = str(row['Room'])
-            proctor_needed = row.get('proctor_needed', True)
-            two_rooms_needed = row.get('two_rooms_needed', False)
+            section_proctors[section_id] = {'proctor': [], 'subject': row['Subject'], 'exam_name': row['Subject'],
+                                            'date': row['Date']}
+            section_proctor_map[section_id] = ''
 
-            if not proctor_needed:
-                section_proctors[section_id] = {'proctor': [], 'subject': subject, 'exam_name': subject, 'date': exam_date}
-                section_proctor_map[section_id] = ''
-                continue
+        # Process sections that need proctors
+        proctor_needed_df = self.schedule_df[self.schedule_df['proctor_needed'] == True].copy()
 
-            assignment_key = (exam_date, time_slot, room)
-            if assignment_key in room_proctor_assignment:
-                assigned = room_proctor_assignment[assignment_key]
-                logging.info(f"Для секции {section_id} в слоте ({room} {time_slot}) используются уже назначенные прокторы.")
+        # Normalize room names to handle pairs like '201,202' vs '202,201'
+        def normalize_room(room_str):
+            room_str = str(room_str)
+            if ',' in room_str:
+                return ','.join(sorted(room_str.split(',')))
+            return room_str
+
+        proctor_needed_df['normalized_room'] = proctor_needed_df['Room'].apply(normalize_room)
+        proctor_needed_df['stripped_time_slot'] = proctor_needed_df['Time_Slot'].str.strip()
+
+        # Group by the logical exam event
+        grouped_events = proctor_needed_df.groupby(['Date', 'stripped_time_slot', 'normalized_room', 'Subject'])
+
+        for event_key, group_df in grouped_events:
+            representative_row = group_df.iloc[0]
+            exam_date, time_slot, _, subject = event_key
+            room = representative_row['Room']
+            two_rooms_needed = representative_row.get('two_rooms_needed', False)
+
+            if '107' in str(room):
+                num_proctors = 4
+            elif two_rooms_needed:
+                num_proctors = 2
             else:
-                if '107' in room:
-                    num_proctors = 4
-                elif two_rooms_needed:
-                    num_proctors = 2
-                else:
-                    num_proctors = 1
+                num_proctors = 1
 
-                is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
-                if is_sct_subject:
-                    proctor_pool = sct_proctors
-                else:
-                    excluded_faculties = self.subject_faculty_map.get(subject, set()) | {'Школа цифровых технологий'}
-                    proctor_pool = [p for p in non_sct_proctors if not any(p in self.faculty_proctors.get(faculty, []) for faculty in excluded_faculties)]
+            is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
+            proctor_pool = sct_proctors if is_sct_subject else [p for p in non_sct_proctors if not any(
+                p in self.faculty_proctors.get(faculty, []) for faculty in
+                (self.subject_faculty_map.get(subject, set()) | {'Школа цифровых технологий'}))]
 
-                if not proctor_pool:
-                    logging.error(f"Нет доступных прокторов для {section_id}")
-                    raise ValueError(f"Нет доступных прокторов для {section_id}")
-
+            if not proctor_pool:
+                logging.error(f"Нет доступных прокторов для события: {subject} в {room} на {exam_date} {time_slot}")
+                assigned = []
+            else:
                 slot_key = (exam_date, time_slot)
                 busy_proctors = proctor_schedule.get(slot_key, [])
-                available = [p for p in proctor_pool if proctor_load.get(p, 0) < MAX_PROCTOR_LOAD and p not in busy_proctors]
+                available = [p for p in proctor_pool if
+                             proctor_load.get(p, 0) < MAX_PROCTOR_LOAD and p not in busy_proctors]
 
                 if len(available) < num_proctors:
-                    logging.error(f"Недостаточно свободных прокторов для {section_id}: требуется {num_proctors}, доступно {len(available)}")
-                    raise ValueError(f"Недостаточно свободных прокторов для {section_id}")
+                    logging.error(
+                        f"Недостаточно свободных прокторов для {subject} в {room}: требуется {num_proctors}, доступно {len(available)}")
+                    assigned = available
+                else:
+                    available.sort(
+                        key=lambda p: (proctor_load.get(p, 0), -proctor_availability.get(p, 0), random.random()))
+                    assigned = available[:num_proctors]
 
-                # Sort by load, then by descending availability (to use generalists first), then randomly
-                available.sort(key=lambda p: (proctor_load.get(p, 0), -proctor_availability.get(p, 0), random.random()))
-                assigned = available[:num_proctors]
-
-                exam_duration_hours = row.get('Duration', 180) / 60
-                for proctor in assigned:
-                    proctor_load[proctor] = proctor_load.get(proctor, 0) + exam_duration_hours
-                    if proctor_load[proctor] >= MAX_PROCTOR_LOAD:
-                        logging.warning(f"Проктор {proctor} достиг максимальной нагрузки.")
-                    proctor_schedule.setdefault(slot_key, []).append(proctor)
-                
-                room_proctor_assignment[assignment_key] = assigned
+            exam_duration_hours = representative_row.get('Duration', 180) / 60
+            slot_key = (exam_date, time_slot)
+            for proctor in assigned:
+                proctor_load[proctor] = proctor_load.get(proctor, 0) + exam_duration_hours
+                if proctor_load[proctor] >= MAX_PROCTOR_LOAD:
+                    logging.warning(f"Проктор {proctor} достиг максимальной нагрузки.")
+                proctor_schedule.setdefault(slot_key, []).append(proctor)
 
             proctor_str = ', '.join(assigned) if assigned else ''
-            section_proctor_map[section_id] = proctor_str
-            section_proctors[section_id] = {'proctor': assigned, 'subject': subject, 'exam_name': subject, 'date': exam_date}
+            for _, row in group_df.iterrows():
+                section_id = row['Section']
+                section_proctor_map[section_id] = proctor_str
+                section_proctors[section_id] = {'proctor': assigned, 'subject': subject, 'exam_name': subject,
+                                                'date': exam_date}
 
         self.schedule_df['Proctor'] = self.schedule_df['Section'].map(section_proctor_map)
         self.section_proctors = section_proctors
@@ -926,7 +935,7 @@ class ExamScheduler:
             proctors_str = row.get('Proctor', '')
             if not proctors_str or pd.isna(proctors_str):
                 continue
-            
+
             proctors = [p.strip() for p in proctors_str.split(',')]
             exam_duration_hours = row.get('Duration', 180) / 60
             for proctor in proctors:
