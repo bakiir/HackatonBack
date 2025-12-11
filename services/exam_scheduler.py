@@ -762,6 +762,19 @@ class ExamScheduler:
             return pd.DataFrame()
 
     def assign_proctors(self, proctors_path=None):
+        # --- NEW: Group consecutive slots first ---
+        logging.info("Предварительная группировка последовательных временных слотов...")
+        if not self.schedule_df.empty and 'Time_Slot' in self.schedule_df.columns:
+            # Ensure correct date format before grouping
+            if 'Date' in self.schedule_df.columns:
+                 self.schedule_df['Date'] = pd.to_datetime(self.schedule_df['Date']).dt.strftime('%Y-%m-%d')
+
+            schedule_records = self.schedule_df.to_dict('records')
+            grouped_records = group_consecutive_slots(schedule_records)
+            self.schedule_df = pd.DataFrame(grouped_records)
+            logging.info(f"Группировка завершена. Количество записей в расписании: {len(self.schedule_df)}")
+        # --- END NEW ---
+
         logging.info("Назначение прокторов.")
         section_proctor_map = {}
         section_proctors = {}
@@ -931,99 +944,98 @@ class ExamScheduler:
         for event in events_to_process:
             event_key = event['key']
             group_df = event['df']
-            
-            representative_row = group_df.iloc[0]
             exam_date, time_slot, subject = event_key
 
-            # --- Улучшенная логика определения кол-ва прокторов v4 ---
-            total_students_in_event = group_df['Students_Count'].sum()
-            unique_rooms = group_df['Room'].unique()
-            num_unique_rooms = len(unique_rooms)
-            PROCTOR_STUDENT_THRESHOLD = 50
+            # --- NEW: Iterate over each room within the event group ---
+            for room, room_df in group_df.groupby('normalized_room'):
+                representative_row = room_df.iloc[0]
+                
+                # --- Logic to determine num_proctors MOVED inside room loop ---
+                total_students_in_room = room_df['Students_Count'].sum()
+                PROCTOR_STUDENT_THRESHOLD = 50
+                
+                # Determine num_proctors based on THIS room/room-pair
+                two_rooms_needed_flag = representative_row.get('two_rooms_needed', False)
 
-            # Правило для ауд. 107 (высший приоритет)
-            if '107' in unique_rooms:
-                num_proctors = 4
-            # Правило для физически разделенных комнат
-            elif num_unique_rooms > 1:
-                num_proctors = num_unique_rooms  # Назначаем по одному проктору на комнату
-            # Правило для одной комнаты
-            else:
-                if total_students_in_event > PROCTOR_STUDENT_THRESHOLD:
+                if '107' in str(room):
+                    num_proctors = 4
+                elif two_rooms_needed_flag:
                     num_proctors = 2
+                else:  # It's a single room and not a special two-room exam
+                    if total_students_in_room > PROCTOR_STUDENT_THRESHOLD:
+                        num_proctors = 2
+                    else:
+                        num_proctors = 1
+
+                # --- Proctor pool selection and assignment (mostly same) ---
+                is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
+                proctor_pool = sct_proctors if is_sct_subject else [p for p in non_sct_proctors if not any(
+                    p in self.faculty_proctors.get(faculty, []) for faculty in
+                    (self.subject_faculty_map.get(subject, set()) | {'Школа цифровых технологий'}))]
+
+                if not proctor_pool:
+                    logging.error(f"Нет доступных прокторов для события: {subject} в {room} на {exam_date} {time_slot}")
+                    assigned = []
                 else:
-                    num_proctors = 1
+                    slot_key = (exam_date, time_slot)
+                    busy_proctors = proctor_schedule.get(slot_key, [])
+                    available = [p for p in proctor_pool if
+                                 proctor_load.get(p, 0) < MAX_PROCTOR_LOAD and p not in busy_proctors]
 
-            is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
-            proctor_pool = sct_proctors if is_sct_subject else [p for p in non_sct_proctors if not any(
-                p in self.faculty_proctors.get(faculty, []) for faculty in
-                (self.subject_faculty_map.get(subject, set()) | {'Школа цифровых технологий'}))]
-
-            if not proctor_pool:
-                logging.error(f"Нет доступных прокторов для события: {subject} в {room} на {exam_date} {time_slot}")
-                assigned = []
-            else:
-                slot_key = (exam_date, time_slot)
-                busy_proctors = proctor_schedule.get(slot_key, [])
-                available = [p for p in proctor_pool if
-                             proctor_load.get(p, 0) < MAX_PROCTOR_LOAD and p not in busy_proctors]
-
-                if len(available) < num_proctors:
-                    logging.error(
-                        f"Недостаточно свободных прокторов для {subject} в {room}: требуется {num_proctors}, доступно {len(available)}")
-                    # Назначаем всех, кого можем
-                    assigned = available
-                else:
-                    # --- Улучшенная логика сортировки для справедливого распределения ---
-                    available.sort(
-                        key=lambda p: (
-                            proctor_load.get(p, 0),  # 1. Приоритет тем, у кого меньше текущая нагрузка
-                            random.random()  # 2. Случайный фактор для разнообразия
+                    if len(available) < num_proctors:
+                        logging.error(
+                            f"Недостаточно свободных прокторов для {subject} в {room}: требуется {num_proctors}, доступно {len(available)}")
+                        # Назначаем всех, кого можем
+                        assigned = available
+                    else:
+                        # --- Улучшенная логика сортировки для справедливого распределения ---
+                        available.sort(
+                            key=lambda p: (
+                                proctor_load.get(p, 0),  # 1. Приоритет тем, у кого меньше текущая нагрузка
+                                random.random()  # 2. Случайный фактор для разнообразия
+                            )
                         )
-                    )
-                    assigned = available[:num_proctors]
+                        assigned = available[:num_proctors]
 
-            exam_duration_hours = representative_row.get('Duration', 180) / 60
-            slot_key = (exam_date, time_slot)
-            for proctor in assigned:
-                proctor_load[proctor] = proctor_load.get(proctor, 0) + exam_duration_hours
-                if proctor_load[proctor] >= MAX_PROCTOR_LOAD:
-                    logging.warning(f"Проктор {proctor} достиг максимальной нагрузки.")
-                proctor_schedule.setdefault(slot_key, []).append(proctor)
+                # --- Update load and schedule for the assigned proctors ---
+                exam_duration_hours = representative_row.get('Duration', 180) / 60
+                slot_key = (exam_date, time_slot)
+                for proctor in assigned:
+                    proctor_load[proctor] = proctor_load.get(proctor, 0) + exam_duration_hours
+                    if proctor_load[proctor] >= MAX_PROCTOR_LOAD:
+                        logging.warning(f"Проктор {proctor} достиг максимальной нагрузки.")
+                    proctor_schedule.setdefault(slot_key, []).append(proctor)
 
-            proctor_str = ', '.join(assigned) if assigned else ''
-            for _, row in group_df.iterrows():
-                section_id = row['Section']
-                section_proctor_map[section_id] = proctor_str
-                section_proctors[section_id] = {'proctor': assigned, 'subject': subject, 'exam_name': subject,
-                                                'date': exam_date}
+                # --- Assign these specific proctors ONLY to sections in this room_df ---
+                proctor_str = ', '.join(assigned) if assigned else ''
+                for _, row in room_df.iterrows():
+                    section_id = row['Section']
+                    section_proctor_map[section_id] = proctor_str
+                    section_proctors[section_id] = {'proctor': assigned, 'subject': subject, 'exam_name': subject,
+                                                    'date': exam_date}
 
         self.schedule_df['Proctor'] = self.schedule_df['Section'].map(section_proctor_map)
         self.section_proctors = section_proctors
 
-        # --- Authoritative load calculation from final schedule ---
-        # A "duty" is one exam event, which might be split into multiple time blocks.
-        # We must group these blocks first to get an accurate count.
+        # --- Balancing Step ---
+        self.proctor_schedule = proctor_schedule
+        self.sct_proctors = sct_proctors
+        # self._balance_proctor_load()
+
+        # --- Final Load Calculation and Logging ---
         schedule_records = self.schedule_df.to_dict('records')
         grouped_records = group_consecutive_slots(schedule_records)
         grouped_df = pd.DataFrame(grouped_records)
-
-        final_proctor_load = defaultdict(int)
-
-        # Iterate over the grouped schedule to count the real number of duties
+        final_proctor_load = defaultdict(float)
         for _, row in grouped_df.iterrows():
             proctors_str = row.get('Proctor', '')
-            if not proctors_str or pd.isna(proctors_str):
-                continue
-
+            if not proctors_str or pd.isna(proctors_str): continue
             proctors = [p.strip() for p in proctors_str.split(',')]
             exam_duration_hours = row.get('Duration', 180) / 60
             for proctor in proctors:
-                if proctor:
-                    final_proctor_load[proctor] += exam_duration_hours
+                if proctor: final_proctor_load[proctor] += exam_duration_hours
 
-        # --- Logging based on authoritative count ---
-        logging.info("Статистика по нагрузке на прокторов (в часах, на основе финального расписания):")
+        logging.info("Статистика по нагрузке на прокторов (в часах, ПОСЛЕ БАЛАНСИРОВКИ):")
         if hasattr(self, 'faculty_proctors') and self.faculty_proctors:
             for faculty, proctors_in_faculty in self.faculty_proctors.items():
                 faculty_loads = {p: final_proctor_load.get(p, 0) for p in proctors_in_faculty}
@@ -2002,13 +2014,106 @@ class ExamScheduler:
             if room in self.room_availability_grid[day_str]:
                 for i in range(start_block, start_block + total_blocks):
                     if i < num_blocks_in_day: self.room_availability_grid[day_str][room][i] = True
+    def _balance_proctor_load(self):
+        logging.info("Запуск второго прохода для балансировки нагрузки прокторов.")
+        MAX_ITERATIONS = 20  # Limit iterations to prevent infinite loops
+        MIN_IMPROVEMENT_HOURS = 1.5 # Smallest exam duration to consider moving
+        
+        for iteration in range(MAX_ITERATIONS):
+            # Recalculate authoritative load before each iteration
+            schedule_records = self.schedule_df.to_dict('records')
+            grouped_records = group_consecutive_slots(schedule_records)
+            grouped_df = pd.DataFrame(grouped_records)
+            final_proctor_load = defaultdict(float)
+            for _, row in grouped_df.iterrows():
+                proctors_str = row.get('Proctor', '')
+                if not proctors_str or pd.isna(proctors_str): continue
+                proctors = [p.strip() for p in proctors_str.split(',')]
+                exam_duration_hours = row.get('Duration', 180) / 60
+                for proctor in proctors:
+                    if proctor: final_proctor_load[proctor] += exam_duration_hours
+            
+            if not hasattr(self, 'faculty_proctors'):
+                break
+
+            improvement_found_in_iteration = False
+            for faculty, proctors_in_faculty in self.faculty_proctors.items():
+                faculty_loads = {p: final_proctor_load.get(p, 0) for p in proctors_in_faculty if final_proctor_load.get(p, 0) > 0}
+                if len(faculty_loads) < 2: continue
+
+                max_p = max(faculty_loads, key=faculty_loads.get)
+                min_p = min(faculty_loads, key=faculty_loads.get)
+
+                if (faculty_loads[max_p] - faculty_loads[min_p]) < MIN_IMPROVEMENT_HOURS * 1.5:
+                    continue
+
+                exams_of_max_p = self.schedule_df[self.schedule_df['Proctor'].str.contains(f"\\b{re.escape(max_p)}\\b", na=False)].copy()
+                if exams_of_max_p.empty: continue
+                
+                exams_of_max_p['duration_hours'] = exams_of_max_p['Duration'] / 60
+                exams_of_max_p = exams_of_max_p.sort_values(by='duration_hours', ascending=False)
+
+                for _, exam_row in exams_of_max_p.iterrows():
+                    exam_duration_hours = exam_row['duration_hours']
+                    if exam_duration_hours < MIN_IMPROVEMENT_HOURS: continue
+                    if (faculty_loads[min_p] + exam_duration_hours) >= faculty_loads[max_p]: continue
+
+                    # Ensure date is a string for the key
+                    date_for_key = exam_row['Date']
+                    if not isinstance(date_for_key, str):
+                        date_for_key = pd.to_datetime(date_for_key).strftime('%Y-%m-%d')
+
+                    slot_key = (date_for_key, exam_row['Time_Slot'].strip())
+                    
+                    subject = exam_row['Subject']
+                    is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
+                    is_min_p_sct = min_p in self.sct_proctors
+                    
+                    eligible = (is_sct_subject and is_min_p_sct) or (not is_sct_subject and not is_min_p_sct)
+                    if not eligible: continue
+
+                    if min_p not in self.proctor_schedule.get(slot_key, []):
+                        # --- Defensive Check ---
+                        if max_p not in self.proctor_schedule.get(slot_key, []):
+                            logging.warning(f"  НЕКОНСИСТЕНТНОСТЬ ДАННЫХ при балансировке!")
+                            logging.warning(f"  Проктор {max_p} найден в schedule_df для слота {slot_key}, но отсутствует в proctor_schedule.")
+                            logging.warning(f"  Содержимое proctor_schedule для этого слота: {self.proctor_schedule.get(slot_key, [])}")
+                            continue  # Skip this swap to prevent crash
+
+                        logging.info(f"  БАЛАНСИРОВКА: Итерация {iteration+1}. Перемещение экзамена ({exam_duration_hours:.2f}ч) от {max_p} к {min_p} в {faculty}")
+                        
+                        old_proctors_list = [p.strip() for p in exam_row['Proctor'].split(',')]
+                        if len(old_proctors_list) > 1:
+                            try:
+                                old_proctors_list.remove(max_p)
+                                old_proctors_list.append(min_p)
+                                new_proctors_str = ', '.join(sorted(old_proctors_list))
+                            except ValueError: continue
+                        else:
+                            new_proctors_str = min_p
+                        
+                        self.schedule_df.loc[self.schedule_df.index == exam_row.name, 'Proctor'] = new_proctors_str
+                        self.proctor_schedule[slot_key].remove(max_p)
+                        self.proctor_schedule[slot_key].append(min_p)
+                        
+                        improvement_found_in_iteration = True
+                        break
+                if improvement_found_in_iteration: break
+            
+            if not improvement_found_in_iteration:
+                logging.info(f"Улучшений не найдено на итерации {iteration+1}. Завершение балансировки.")
+                break
+        
+        logging.info("Балансировка нагрузки завершена.")
+
+
     def _log_schedule_stats(self):
         if self.schedule_df.empty:
             logging.info("Расписание пустое.")
             return
 
         exams_per_day = self.schedule_df.groupby('Date').size()
-        for date, count in exams_per_day.items():
+        for date, count in exams_per_per_day.items():
             slots_used = count // len(self.rooms) + (1 if count % len(self.rooms) > 0 else 0)
             logging.info(f"День {date}: использовано {slots_used} из {len(self.time_slots)} слотов, экзаменов: {count}")
         logging.info(
