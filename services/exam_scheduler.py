@@ -946,75 +946,112 @@ class ExamScheduler:
             group_df = event['df']
             exam_date, time_slot, subject = event_key
 
-            # --- NEW: Iterate over each room within the event group ---
-            for room, room_df in group_df.groupby('normalized_room'):
-                representative_row = room_df.iloc[0]
-                
-                # --- Logic to determine num_proctors MOVED inside room loop ---
-                total_students_in_room = room_df['Students_Count'].sum()
-                PROCTOR_STUDENT_THRESHOLD = 50
-                
-                # Determine num_proctors based on THIS room/room-pair
-                two_rooms_needed_flag = representative_row.get('two_rooms_needed', False)
+            # --- Refactored Logic to handle events as a whole ---
 
-                if '107' in str(room):
-                    num_proctors = 4
-                elif two_rooms_needed_flag:
+            # 1. Analyze the event to determine total proctor needs
+            unique_rooms = group_df['normalized_room'].unique()
+            num_unique_rooms = len(unique_rooms)
+            representative_row = group_df.iloc[0]
+            two_rooms_needed_flag = representative_row.get('two_rooms_needed', False)
+            PROCTOR_STUDENT_THRESHOLD = 50
+
+            total_proctors_needed = 0
+            proctors_per_room_map = defaultdict(int)
+
+            if '107' in unique_rooms:
+                total_proctors_needed = 4
+                proctors_per_room_map['107'] = 4
+            elif two_rooms_needed_flag and num_unique_rooms > 1:
+                # For a split exam, assign one proctor per room
+                total_proctors_needed = num_unique_rooms
+                for room in unique_rooms:
+                    proctors_per_room_map[room] = 1
+            else:
+                # For a single-room exam (or a two_rooms_needed exam that got one big room)
+                room_name = unique_rooms[0]
+                total_students = group_df['Students_Count'].sum()
+                if total_students > PROCTOR_STUDENT_THRESHOLD:
                     num_proctors = 2
-                else:  # It's a single room and not a special two-room exam
-                    if total_students_in_room > PROCTOR_STUDENT_THRESHOLD:
-                        num_proctors = 2
-                    else:
-                        num_proctors = 1
-
-                # --- Proctor pool selection and assignment (mostly same) ---
-                is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
-                proctor_pool = sct_proctors if is_sct_subject else [p for p in non_sct_proctors if not any(
-                    p in self.faculty_proctors.get(faculty, []) for faculty in
-                    (self.subject_faculty_map.get(subject, set()) | {'Школа цифровых технологий'}))]
-
-                if not proctor_pool:
-                    logging.error(f"Нет доступных прокторов для события: {subject} в {room} на {exam_date} {time_slot}")
-                    assigned = []
                 else:
-                    slot_key = (exam_date, time_slot)
-                    busy_proctors = proctor_schedule.get(slot_key, [])
-                    available = [p for p in proctor_pool if
-                                 proctor_load.get(p, 0) < MAX_PROCTOR_LOAD and p not in busy_proctors]
+                    num_proctors = 1
+                total_proctors_needed = num_proctors
+                proctors_per_room_map[room_name] = num_proctors
 
-                    if len(available) < num_proctors:
-                        logging.error(
-                            f"Недостаточно свободных прокторов для {subject} в {room}: требуется {num_proctors}, доступно {len(available)}")
-                        # Назначаем всех, кого можем
-                        assigned = available
-                    else:
-                        # --- Улучшенная логика сортировки для справедливого распределения ---
-                        available.sort(
-                            key=lambda p: (
-                                proctor_load.get(p, 0),  # 1. Приоритет тем, у кого меньше текущая нагрузка
-                                random.random()  # 2. Случайный фактор для разнообразия
-                            )
-                        )
-                        assigned = available[:num_proctors]
+            # 2. Select a pool of available proctors for the entire event
+            is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
+            proctor_pool = sct_proctors if is_sct_subject else [p for p in non_sct_proctors if not any(
+                p in self.faculty_proctors.get(faculty, []) for faculty in
+                (self.subject_faculty_map.get(subject, set()) | {'Школа цифровых технологий'}))]
 
-                # --- Update load and schedule for the assigned proctors ---
-                exam_duration_hours = representative_row.get('Duration', 180) / 60
+            assigned_proctors = []
+            if not proctor_pool:
+                logging.error(f"Нет доступных прокторов для события: {subject} на {exam_date} {time_slot}")
+            else:
                 slot_key = (exam_date, time_slot)
-                for proctor in assigned:
-                    proctor_load[proctor] = proctor_load.get(proctor, 0) + exam_duration_hours
-                    if proctor_load[proctor] >= MAX_PROCTOR_LOAD:
-                        logging.warning(f"Проктор {proctor} достиг максимальной нагрузки.")
-                    proctor_schedule.setdefault(slot_key, []).append(proctor)
+                busy_proctors = proctor_schedule.get(slot_key, [])
 
-                # --- Assign these specific proctors ONLY to sections in this room_df ---
-                proctor_str = ', '.join(assigned) if assigned else ''
+                # Конвертируем дату в datetime-объект для проверки доступности преподавателя
+                exam_day_obj = datetime.strptime(exam_date, '%Y-%m-%d')
+                # Получаем словарь с информацией о текущем экзамене для проверки
+                exam_info_dict = representative_row.to_dict()
+
+                # Фильтруем прокторов, проверяя их доступность как преподавателей
+                available = [
+                    p for p in proctor_pool if
+                    p not in busy_proctors and
+                    proctor_load.get(p, 0) < MAX_PROCTOR_LOAD and
+                    self._is_instructor_available(p, exam_day_obj, time_slot, exam_info_dict)
+                ]
+
+                if len(available) < total_proctors_needed:
+                    logging.error(
+                        f"Недостаточно свободных прокторов для {subject}: требуется {total_proctors_needed}, доступно {len(available)}. Назначение не выполнено.")
+                    assigned_proctors = []  # НЕ назначаем неполный состав
+                else:
+                    # Сортируем доступных прокторов по нагрузке и назначаем лучших
+                    available.sort(key=lambda p: (proctor_load.get(p, 0), random.random()))
+                    assigned_proctors = available[:total_proctors_needed]
+
+            # 3. Distribute the assigned proctors to rooms and update the schedule map
+            proctor_iterator = iter(assigned_proctors)
+            for room in unique_rooms:
+                num_needed_for_room = proctors_per_room_map[room]
+                proctors_for_this_room = [next(proctor_iterator, None) for _ in range(num_needed_for_room)]
+                proctors_for_this_room = [p for p in proctors_for_this_room if p is not None]
+
+                proctor_str = ', '.join(proctors_for_this_room)
+
+                # Find all rows in the group that match this room
+                room_df = group_df[group_df['normalized_room'] == room]
                 for _, row in room_df.iterrows():
-                    section_id = row['Section']
-                    section_proctor_map[section_id] = proctor_str
-                    section_proctors[section_id] = {'proctor': assigned, 'subject': subject, 'exam_name': subject,
+                    # FIX: Use a composite key (section, room) to store proctor assignment
+                    map_key = (row['Section'], row['normalized_room'])
+                    section_proctor_map[map_key] = proctor_str
+                    
+                    # This section_proctors dict also has a bug of overwriting.
+                    # Keying it by section_id is not unique enough for split exams.
+                    section_proctors[row['Section']] = {'proctor': proctors_for_this_room, 'subject': subject,
+                                                    'exam_name': subject,
                                                     'date': exam_date}
 
-        self.schedule_df['Proctor'] = self.schedule_df['Section'].map(section_proctor_map)
+            # 4. Update load and busy schedule for all assigned proctors
+            exam_duration_hours = representative_row.get('Duration', 180) / 60
+            slot_key = (exam_date, time_slot)
+            for proctor in assigned_proctors:
+                proctor_load[proctor] = proctor_load.get(proctor, 0) + exam_duration_hours
+                if proctor_load[proctor] >= MAX_PROCTOR_LOAD:
+                    logging.warning(f"Проктор {proctor} достиг максимальной нагрузки.")
+                proctor_schedule.setdefault(slot_key, []).append(proctor)
+
+        # FIX: Apply the new mapping logic using a composite key
+        self.schedule_df['normalized_room'] = self.schedule_df['Room'].apply(normalize_room)
+        
+        def get_proctor_for_row(row):
+            key = (row['Section'], row['normalized_room'])
+            return section_proctor_map.get(key, '')
+            
+        self.schedule_df['Proctor'] = self.schedule_df.apply(get_proctor_for_row, axis=1)
+        self.schedule_df.drop(columns=['normalized_room'], inplace=True, errors='ignore')
         self.section_proctors = section_proctors
 
         # --- Balancing Step ---
@@ -1094,12 +1131,24 @@ class ExamScheduler:
         # Определяем тип нового экзамена для проверки конфликтов
         new_exam_type = self.get_exam_type(new_exam_group)
 
-        for exam in self.schedule:
+        # FIX: Use self.schedule_df if self.schedule is not available.
+        schedule_source = []
+        if hasattr(self, 'schedule') and self.schedule:
+            schedule_source = self.schedule
+        elif not self.schedule_df.empty:
+            schedule_source = self.schedule_df.to_dict('records')
+
+        for exam in schedule_source:
             if (
-                    exam['Instructor'] == instructor and
-                    exam['Date'] == day.strftime('%Y-%m-%d')
+                    exam.get('Instructor') == instructor and
+                    str(exam.get('Date', '')).startswith(day.strftime('%Y-%m-%d'))
             ):
-                exam_start, exam_end = exam['Time_Slot'].split('-')
+                # FIX: Handle records with invalid Time_Slot like 'N/A'
+                exam_time_slot = exam.get('Time_Slot')
+                if not exam_time_slot or '-' not in exam_time_slot:
+                    continue  # Skip records without a valid time slot
+
+                exam_start, exam_end = exam_time_slot.split('-')
                 exam_start_dt = datetime.strptime(exam_start, '%H:%M')
                 exam_end_dt = datetime.strptime(exam_end, '%H:%M')
 
