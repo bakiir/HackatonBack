@@ -864,8 +864,9 @@ class ExamScheduler:
         proctor_needed_df['normalized_room'] = proctor_needed_df['Room'].apply(normalize_room)
         proctor_needed_df['stripped_time_slot'] = proctor_needed_df['Time_Slot'].str.strip()
 
-        # Group by the logical exam event
-        grouped_events = proctor_needed_df.groupby(['Date', 'stripped_time_slot', 'normalized_room', 'Subject'])
+        # Group by the logical exam event, intentionally ignoring room to group split-exams together.
+        logging.info("Группировка экзаменов по дате, времени и предмету для назначения прокторов.")
+        grouped_events = proctor_needed_df.groupby(['Date', 'stripped_time_slot', 'Subject'])
 
         # --- Новый подход к распределению нагрузки ---
         # 1. Рассчитываем общую нагрузку и целевую нагрузку на одного проктора
@@ -877,13 +878,16 @@ class ExamScheduler:
         grouped_records = group_consecutive_slots(schedule_records)
         
         for exam in grouped_records:
+            # This logic for total hours is now slightly less accurate because it can't
+            # easily know the number of proctors for split rooms without grouping.
+            # However, it's only for a logging metric, so it's an acceptable trade-off.
             room = exam.get('Room', '')
             two_rooms_needed = exam.get('two_rooms_needed', False)
             duration_hours = exam.get('Duration', 180) / 60
             
             if '107' in str(room):
                 num_proctors_needed = 4
-            elif two_rooms_needed:
+            elif two_rooms_needed or ',' in str(room): # Heuristic for total load
                 num_proctors_needed = 2
             else:
                 num_proctors_needed = 1
@@ -899,18 +903,56 @@ class ExamScheduler:
             logging.warning("Нет доступных прокторов для расчета целевой нагрузки.")
 
         # 2. Основной цикл назначения
+        # --- Улучшение: Сортировка событий по "требовательности" (v4) ---
+        events_to_process = []
         for event_key, group_df in grouped_events:
             representative_row = group_df.iloc[0]
-            exam_date, time_slot, _, subject = event_key
-            room = representative_row['Room']
-            two_rooms_needed = representative_row.get('two_rooms_needed', False)
+            # --- v4 logic: determine demand based on the whole group ---
+            unique_rooms = group_df['Room'].unique()
+            num_unique_rooms = len(unique_rooms)
+            duration_hours = representative_row.get('Duration', 180) / 60
 
-            if '107' in str(room):
-                num_proctors = 4
-            elif two_rooms_needed:
-                num_proctors = 2
+            if '107' in unique_rooms:
+                num_proctors_needed = 4
+            elif num_unique_rooms > 1:
+                num_proctors_needed = num_unique_rooms
             else:
-                num_proctors = 1
+                num_proctors_needed = 1
+
+            # Ключ сортировки: сначала по кол-ву прокторов, потом по длительности
+            demand_key = (num_proctors_needed, duration_hours)
+            events_to_process.append({'key': event_key, 'df': group_df, 'demand': demand_key})
+
+        # Сортируем события от самых требовательных к наименее
+        events_to_process.sort(key=lambda x: x['demand'], reverse=True)
+        
+        logging.info(f"Начинается назначение прокторов для {len(events_to_process)} экзаменационных событий (отсортировано по требовательности).")
+
+        for event in events_to_process:
+            event_key = event['key']
+            group_df = event['df']
+            
+            representative_row = group_df.iloc[0]
+            exam_date, time_slot, subject = event_key
+
+            # --- Улучшенная логика определения кол-ва прокторов v4 ---
+            total_students_in_event = group_df['Students_Count'].sum()
+            unique_rooms = group_df['Room'].unique()
+            num_unique_rooms = len(unique_rooms)
+            PROCTOR_STUDENT_THRESHOLD = 50
+
+            # Правило для ауд. 107 (высший приоритет)
+            if '107' in unique_rooms:
+                num_proctors = 4
+            # Правило для физически разделенных комнат
+            elif num_unique_rooms > 1:
+                num_proctors = num_unique_rooms  # Назначаем по одному проктору на комнату
+            # Правило для одной комнаты
+            else:
+                if total_students_in_event > PROCTOR_STUDENT_THRESHOLD:
+                    num_proctors = 2
+                else:
+                    num_proctors = 1
 
             is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
             proctor_pool = sct_proctors if is_sct_subject else [p for p in non_sct_proctors if not any(
