@@ -1779,7 +1779,7 @@ def update_proctor_status():
         # Обновляем proctor_needed в exam_groups
         for exam in data['exams']:
             section_id = exam.get('section_id')
-            proctor_needed = exam.get('proctor_needed', False)
+            proctor_needed = exam.get('has_proctor', exam.get('proctor_needed', False))
             if section_id not in current_scheduler.exam_groups['Section'].values:
                 logging.warning(f"Секция {section_id} не найдена в exam_groups")
                 continue

@@ -867,6 +867,38 @@ class ExamScheduler:
         # Group by the logical exam event
         grouped_events = proctor_needed_df.groupby(['Date', 'stripped_time_slot', 'normalized_room', 'Subject'])
 
+        # --- Новый подход к распределению нагрузки ---
+        # 1. Рассчитываем общую нагрузку и целевую нагрузку на одного проктора
+        total_proctoring_hours = 0
+        proctor_needed_df = self.schedule_df[self.schedule_df['proctor_needed'] == True]
+        
+        # Группируем события, чтобы не считать часы дважды для одного и того же экзамена
+        schedule_records = proctor_needed_df.to_dict('records')
+        grouped_records = group_consecutive_slots(schedule_records)
+        
+        for exam in grouped_records:
+            room = exam.get('Room', '')
+            two_rooms_needed = exam.get('two_rooms_needed', False)
+            duration_hours = exam.get('Duration', 180) / 60
+            
+            if '107' in str(room):
+                num_proctors_needed = 4
+            elif two_rooms_needed:
+                num_proctors_needed = 2
+            else:
+                num_proctors_needed = 1
+            
+            total_proctoring_hours += num_proctors_needed * duration_hours
+
+        if available_proctors:
+            target_load_per_proctor = total_proctoring_hours / len(available_proctors)
+            logging.info(f"Общее количество часов для прокторинга: {total_proctoring_hours:.2f}")
+            logging.info(f"Целевая нагрузка на одного проктора: {target_load_per_proctor:.2f} часов")
+        else:
+            target_load_per_proctor = 0
+            logging.warning("Нет доступных прокторов для расчета целевой нагрузки.")
+
+        # 2. Основной цикл назначения
         for event_key, group_df in grouped_events:
             representative_row = group_df.iloc[0]
             exam_date, time_slot, _, subject = event_key
@@ -897,10 +929,16 @@ class ExamScheduler:
                 if len(available) < num_proctors:
                     logging.error(
                         f"Недостаточно свободных прокторов для {subject} в {room}: требуется {num_proctors}, доступно {len(available)}")
+                    # Назначаем всех, кого можем
                     assigned = available
                 else:
+                    # --- Улучшенная логика сортировки для справедливого распределения ---
                     available.sort(
-                        key=lambda p: (proctor_load.get(p, 0), -proctor_availability.get(p, 0), random.random()))
+                        key=lambda p: (
+                            proctor_load.get(p, 0),  # 1. Приоритет тем, у кого меньше текущая нагрузка
+                            random.random()  # 2. Случайный фактор для разнообразия
+                        )
+                    )
                     assigned = available[:num_proctors]
 
             exam_duration_hours = representative_row.get('Duration', 180) / 60
