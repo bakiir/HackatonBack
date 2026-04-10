@@ -22,6 +22,11 @@ import os
 from flask import request
 from create_db import ExamSession, engine, ExamSessionDraft, AdminStatusDraft, RoomExclusion
 from sqlalchemy.orm import sessionmaker
+import os
+from dotenv import load_dotenv
+
+load_dotenv() # Загружаем переменные из .env
+
 import json # Added this import
 
 allowed_roles = {"admin-sdt", "admin-gum", "admin-spigu", "admin-sem", "admin"}
@@ -86,7 +91,7 @@ def send_emails_to_admins():
 
 app = Flask(__name__)
 
-app.config["JWT_SECRET_KEY"] = "your-secret-key"  # тот же, что и в модели
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "fallback-secret-key")
 app.config["JWT_TOKEN_LOCATION"] = ["headers"]     # обязательно!
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=30)
 

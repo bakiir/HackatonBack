@@ -377,6 +377,10 @@ class ExamScheduler:
         total_duration_minutes = (self.work_day_end - self.work_day_start).total_seconds() / 60
         num_blocks_in_day = int(total_duration_minutes / self.time_step)
         total_blocks = len(self.rooms) * num_blocks_in_day * self.original_num_days
+        
+        # Кэширование списка студентов по секциям для O(1) доступа
+        self.section_students_map = self.exams_df.groupby('Section')['fake_id'].apply(list).to_dict()
+        
         logging.info(f"Всего экзаменов: {len(self.exam_groups)}")
         logging.info(f"Всего доступно блоков для планирования: {total_blocks}")
 
@@ -538,9 +542,12 @@ class ExamScheduler:
         """Восстанавливает исходные даты"""
         self.custom_dates = self._generate_initial_dates()
 
+    # Метод перенесен в отдельную логику классификации (в будущем)
+    # Оставляем здесь для совместимости, но помечаем как deprecated
     @staticmethod
     def get_exam_type(exam_info):
         """Определяет тип экзамена на основе его атрибутов."""
+        # TODO: Переместить в services/exam_classifier.py
         has_exam = exam_info.get('has_exam', False)
         proctor_needed = exam_info.get('proctor_needed', False)
         two_rooms_needed = exam_info.get('two_rooms_needed', False)
@@ -580,7 +587,7 @@ class ExamScheduler:
         try:
             # 1. Найти подходящие группы для объединения (работаем только с письменными)
             written_exams_to_process['student_count'] = written_exams_to_process['Section'].map(
-                lambda x: len(self.exams_df[self.exams_df['Section'] == x])
+                lambda x: len(self.section_students_map.get(x, []))
             )
             
             subject_groups = written_exams_to_process.groupby('Subject').agg(
@@ -620,7 +627,7 @@ class ExamScheduler:
 
                 all_students_in_group = set()
                 for section_id in sections_to_schedule:
-                    section_students = set(self.exams_df[self.exams_df['Section'] == section_id]['fake_id'])
+                    section_students = set(self.section_students_map.get(section_id, []))
                     all_students_in_group.update(section_students)
 
                 for slot in free_slots:
@@ -669,7 +676,7 @@ class ExamScheduler:
                         }
                         self.schedule.append(exam_record)
 
-                        section_students_list = self.exams_df[self.exams_df['Section'] == section_id]['fake_id'].tolist()
+                        section_students_list = self.section_students_map.get(section_id, [])
                         for student in section_students_list:
                             if student not in self.student_exams:
                                 self.student_exams[student] = []
@@ -978,10 +985,49 @@ class ExamScheduler:
                 proctors_per_room_map[room_name] = num_proctors
 
             # 2. Select a pool of available proctors for the entire event
-            is_sct_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
-            proctor_pool = sct_proctors if is_sct_subject else [p for p in non_sct_proctors if not any(
-                p in self.faculty_proctors.get(faculty, []) for faculty in
-                (self.subject_faculty_map.get(subject, set()) | {'Школа цифровых технологий'}))]
+            
+            # Create a reverse map from instructor to faculty for a secondary check
+            instructor_faculty_map = {
+                instructor: faculty
+                for faculty, instructors in self.faculty_proctors.items()
+                for instructor in instructors
+            }
+            
+            instructor = representative_row['Instructor']
+
+            # Primary check: based on the subject's faculty from the input file
+            is_sct_by_subject = 'Школа цифровых технологий' in self.subject_faculty_map.get(subject, set())
+            
+            # Secondary (backup) check: based on the exam's instructor's faculty
+            is_sct_by_instructor = instructor_faculty_map.get(instructor) == 'Школа цифровых технологий'
+
+            # If either check is true, we treat this as an SCT exam to be safe.
+            is_sct_subject = is_sct_by_subject or is_sct_by_instructor
+            
+            if is_sct_by_subject != is_sct_by_instructor:
+                logging.warning(f"Обнаружено несоответствие данных для предмета '{subject}' (Инструктор: {instructor}). Карта предметов говорит: ШЦТ={is_sct_by_subject}. Карта инструкторов говорит: ШЦТ={is_sct_by_instructor}. Применяется правило ШЦТ.")
+
+            if is_sct_subject:
+                # For SCT exams, only SCT proctors are allowed.
+                proctor_pool = sct_proctors
+                logging.info(f"Экзамен ШЦТ. Пул прокторов: {len(proctor_pool)} (только ШЦТ)")
+            else:
+                # For non-SCT exams, prioritize non-SCT proctors, but allow SCT as backup.
+                exam_faculties = self.subject_faculty_map.get(subject, set())
+
+                # Primary pool: non-SCT proctors from different faculties (to avoid conflict of interest).
+                primary_pool = [
+                    p for p in non_sct_proctors if not any(
+                        p in self.faculty_proctors.get(f, []) for f in exam_faculties
+                    )
+                ]
+                
+                # Backup pool: all available SCT proctors.
+                backup_pool = sct_proctors
+                
+                # Combine pools. The sorting by load later will handle picking from the primary pool first.
+                proctor_pool = primary_pool + backup_pool
+                logging.info(f"Экзамен не-ШЦТ. Пул прокторов: {len(proctor_pool)} (Приоритет: {len(primary_pool)} не-ШЦТ, Резерв: {len(backup_pool)} ШЦТ)")
 
             assigned_proctors = []
             if not proctor_pool:
@@ -1250,7 +1296,7 @@ class ExamScheduler:
                 for section_id in sections:
                     if section_id in self.exam_groups['Section'].values:
                         group_info = self.exam_groups[self.exam_groups['Section'] == section_id].iloc[0]
-                        num_students = len(self.exams_df[self.exams_df['Section'] == section_id])
+                        num_students = len(self.section_students_map.get(section_id, []))
 
                         exam_record = {
                             'Date': slot_date_str,
@@ -1483,7 +1529,7 @@ class ExamScheduler:
         for group_dict in sections_to_process:
             group = pd.Series(group_dict)
             
-            students = self.exams_df[self.exams_df['Section'] == group['Section']]['fake_id'].tolist()
+            students = self.section_students_map.get(group['Section'], [])
             num_students = len(students)
             duration_minutes = int(group.get('Duration', 180))
             instructor = group['Instructor']
@@ -1588,7 +1634,7 @@ class ExamScheduler:
                 start_block = int((start_dt - self.work_day_start).total_seconds() / 60 / time_step_minutes)
                 end_block = int((end_dt - self.work_day_start).total_seconds() / 60 / time_step_minutes)
                 self._book_slot(day_str, start_block, end_block - start_block, [room], self.num_blocks_in_day)
-                students = self.exams_df[self.exams_df['Section'] == exam['Section']]['fake_id'].tolist()
+                students = self.section_students_map.get(exam['Section'], [])
                 for student_id in students: self.student_exams[student_id].append(exam)
 
             # 2. Подготовка групп
@@ -1598,11 +1644,12 @@ class ExamScheduler:
             if not groups_to_schedule.empty:
                 student_section_counts = self.exams_df['fake_id'].value_counts().to_dict()
                 def get_student_busyness(section_id):
-                    student_ids = self.exams_df[self.exams_df['Section'] == section_id]['fake_id']
-                    if student_ids.empty: return 0
+                    student_ids = self.section_students_map.get(section_id, [])
+                    if not student_ids: return 0
                     total_sections_for_students = sum(student_section_counts.get(sid, 0) for sid in student_ids)
-                    return total_sections_for_students / len(student_ids) if student_ids.size > 0 else 0
-                groups_to_schedule['student_count'] = groups_to_schedule['Section'].map(lambda x: len(self.exams_df[self.exams_df['Section'] == x]))
+                    return total_sections_for_students / len(student_ids)
+
+                groups_to_schedule['student_count'] = groups_to_schedule['Section'].map(lambda x: len(self.section_students_map.get(x, [])))
                 groups_to_schedule['student_busyness'] = groups_to_schedule['Section'].apply(get_student_busyness)
                 w_students = 1.5
                 w_busyness = 2.0
@@ -1616,7 +1663,7 @@ class ExamScheduler:
                 logging.info(f"--- Этап 1: Строгое планирование для {len(groups_to_schedule)} секций ---")
                 hard_to_schedule_groups = []
                 for _, group in groups_to_schedule.iterrows():
-                    students = self.exams_df[self.exams_df['Section'] == group['Section']]['fake_id'].tolist()
+                    students = self.section_students_map.get(group['Section'], [])
                     num_students = len(students)
                     duration_minutes, instructor, two_rooms_needed = int(group.get('Duration', 180)), group['Instructor'], group.get('two_rooms_needed', False)
                     if two_rooms_needed:
@@ -1663,7 +1710,7 @@ class ExamScheduler:
                 if hard_to_schedule_groups:
                     logging.info(f"--- Этап 2: Гибкое планирование для {len(hard_to_schedule_groups)} сложных секций ---")
                     for group in hard_to_schedule_groups:
-                        students = self.exams_df[self.exams_df['Section'] == group['Section']]['fake_id'].tolist()
+                        students = self.section_students_map.get(group['Section'], [])
                         num_students = len(students)
                         duration_minutes, instructor, two_rooms_needed = int(group.get('Duration', 180)), group['Instructor'], group.get('two_rooms_needed', False)
                         if two_rooms_needed:
@@ -1714,7 +1761,7 @@ class ExamScheduler:
                 
             if not no_exam_groups.empty and self.custom_dates:
                 for _, group in no_exam_groups.iterrows():
-                    self.schedule.append({'Date': random.choice(self.custom_dates).strftime('%Y-%m-%d'), 'Subject': group['Subject'], 'Instructor': group['Instructor'], 'EduProgram': group['EduProgram'], 'Section': group['Section'], 'Students_Count': len(self.exams_df[self.exams_df['Section'] == group['Section']]), 'Room': 'N/A', 'Time_Slot': 'N/A', 'Duration': 0, 'proctor_needed': False, 'two_rooms_needed': False, 'pinned': True})
+                    self.schedule.append({'Date': random.choice(self.custom_dates).strftime('%Y-%m-%d'), 'Subject': group['Subject'], 'Instructor': group['Instructor'], 'EduProgram': group['EduProgram'], 'Section': group['Section'], 'Students_Count': len(self.section_students_map.get(group['Section'], [])), 'Room': 'N/A', 'Time_Slot': 'N/A', 'Duration': 0, 'proctor_needed': False, 'two_rooms_needed': False, 'pinned': True})
             
             self.schedule_df = pd.DataFrame(self.schedule) if self.schedule else pd.DataFrame()
             if not self.schedule_df.empty:
@@ -1750,7 +1797,7 @@ class ExamScheduler:
 
     def _calculate_move_delta_cost(self, exam_to_move, new_day_str, student_exams):
         """Вычисляет изменение 'стоимости' (количества конфликтов) при переносе экзамена."""
-        students = self.exams_df[self.exams_df['Section'] == exam_to_move['Section']]['fake_id'].tolist()
+        students = self.section_students_map.get(exam_to_move['Section'], [])
         old_day_str = exam_to_move['Date']
         
         delta_cost = 0
@@ -1876,7 +1923,7 @@ class ExamScheduler:
         buffer_blocks = math.ceil(self.buffer_time / time_step_minutes)
         total_blocks_needed = exam_blocks + buffer_blocks
         
-        students = self.exams_df[self.exams_df['Section'] == exam_rec['Section']]['fake_id'].tolist()
+        students = self.section_students_map.get(exam_rec['Section'], [])
         num_students = len(students)
         instructor = exam_rec['Instructor']
         two_rooms_needed = exam_rec.get('two_rooms_needed', False)
@@ -1941,7 +1988,7 @@ class ExamScheduler:
         exam_rec['Room'] = new_slot_info['Room']
 
         section_id = exam_rec['Section']
-        students = self.exams_df[self.exams_df['Section'] == section_id]['fake_id'].tolist()
+        students = self.section_students_map.get(section_id, [])
         for sid in students:
             for exam in student_exams[sid]:
                 if exam['Section'] == section_id:
@@ -2036,7 +2083,7 @@ class ExamScheduler:
 
     def _apply_move(self, schedule_idx, new_day, new_slot, new_start_block, total_blocks, rooms, student_exams):
         section_id = self.schedule[schedule_idx]['Section']
-        students = self.exams_df[self.exams_df['Section'] == section_id]['fake_id'].tolist()
+        students = self.section_students_map.get(section_id, [])
 
         self.schedule[schedule_idx]['Date'] = new_day
         self.schedule[schedule_idx]['Time_Slot'] = new_slot

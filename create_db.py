@@ -3,6 +3,10 @@ from sqlalchemy.dialects.postgresql import JSON # Изменение 1: Прав
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import json
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 import pandas as pd
 
 Base = declarative_base()
@@ -187,7 +191,7 @@ class RoomExclusion(Base):
 
 
 engine = create_engine(
-    "postgresql+psycopg2://postgres:mysecretpassword@localhost:5433/postgres",
+    os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:mysecretpassword@localhost:5433/postgres"),
     connect_args={'client_encoding': 'utf8'}
 )
 Base.metadata.create_all(engine)

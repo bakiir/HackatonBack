@@ -4,18 +4,22 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 import bcrypt
 import jwt
 from datetime import datetime, timedelta
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from create_db import AdminStatusDraft, ResolvedConflict
 
 
 # Конфигурация JWT
-SECRET_KEY = "your-secret-key"  # Замените на реальный секретный ключ
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Подключение к базе данных
 engine = create_engine(
-    "postgresql+psycopg2://postgres:mysecretpassword@localhost:5433/postgres",
+    os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:mysecretpassword@localhost:5433/postgres"),
     connect_args={'client_encoding': 'utf8'}
 )
 Base = declarative_base()
