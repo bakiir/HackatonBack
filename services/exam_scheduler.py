@@ -1719,13 +1719,15 @@ class ExamScheduler:
     def _delete_sections(self, sections):
 
         # Удаляем из основного DataFrame с экзаменами
-        self.exams_df = self.exams_df[~self.exams_df['Section'].isin(sections)]
+        if self.exams_df is not None and 'Section' in self.exams_df.columns:
+            self.exams_df = self.exams_df[~self.exams_df['Section'].isin(sections)]
 
         # Удаляем из сгруппированных экзаменов
-        self.exam_groups = self.exam_groups[~self.exam_groups['Section'].isin(sections)]
+        if self.exam_groups is not None and 'Section' in self.exam_groups.columns:
+            self.exam_groups = self.exam_groups[~self.exam_groups['Section'].isin(sections)]
 
         # Если расписание уже создано, удаляем и из него
-        if self.schedule_df is not None:
+        if self.schedule_df is not None and not self.schedule_df.empty and 'Section' in self.schedule_df.columns:
             self.schedule_df = self.schedule_df[~self.schedule_df['Section'].isin(sections)]
 
         # Пересчитываем данные
