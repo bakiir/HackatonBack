@@ -19,31 +19,7 @@ session = Session()
 
 exam_bp = Blueprint('exam_bp', __name__)
 
-role_to_faculty = {
-    "admin-sdt": "Школа цифровых технологий",
-    "admin-sem": "Школа экономики и менеджмента",
-    "admin-gum": "Гуманитарная школа",
-    "admin-spigu": "Школа права и государственного управления"
-}
-
-from app import handle_nan_values
-
-def handle_nan_values(obj):
-    import math, numpy as np, pandas as pd
-    if isinstance(obj, (float, np.float64, np.float32)) and (math.isnan(obj) or np.isnan(obj)):
-        return None
-    if isinstance(obj, (np.int64, np.int32)):
-        return int(obj)
-    if isinstance(obj, (np.float64, np.float32)):
-        return float(obj)
-    elif isinstance(obj, dict):
-        return {key: handle_nan_values(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [handle_nan_values(item) for item in obj]
-    elif isinstance(obj, pd.DataFrame):
-        return obj.replace({np.nan: None}).to_dict('records')
-    else:
-        return obj
+from services.scheduler_core.utils import handle_nan_values, role_to_faculty
 
 
 @exam_bp.route('/api/manage', methods=['POST'])
@@ -611,3 +587,59 @@ def export_student_schedule(student_id):
     output_file = f"student_{student_id}_schedule.xlsx"
     store.current_scheduler.export_student_schedule_to_excel(student_id, output_file)
     return send_file(output_file, as_attachment=True)
+
+
+@exam_bp.route('/api/update_exam_durations', methods=['POST'])
+@jwt_required()
+def handle_update_durations():
+    import services.scheduler_store as store
+    claims = get_jwt()
+    user_role = claims.get('role')
+    session = Session()
+    try:
+        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        if active_draft and user_role in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
+            get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
+            logging.info(f"Статус 'in_progress' для {user_role} установлен автоматически.")
+
+        if not store.current_scheduler:
+            return jsonify({
+                'status': 'error',
+                'message': 'Планировщик не инициализирован'
+            }), 400
+
+        data = request.json
+        if not data or 'exams' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Не предоставлены данные об экзаменах'
+            }), 400
+
+        for exam in data['exams']:
+            if 'section_id' not in exam or 'duration' not in exam:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Каждый экзамен должен содержать section_id и duration'
+                }), 400
+
+            if exam['duration'] not in [60, 90, 120, 150, 180]:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Длительность экзамена может быть только 60, 120 или 180 минут'
+                }), 400
+
+        store.current_scheduler.update_exam_durations(data['exams'])
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Длительности экзаменов успешно обновлены'
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении длительностей: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Ошибка при обновлении длительностей: {str(e)}'
+        }), 500
+    finally:
+        session.close()

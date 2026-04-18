@@ -12,18 +12,12 @@ from services.jwt_service import admin_required
 from flask_jwt_extended import jwt_required, get_jwt
 
 from services.exam_scheduler import ExamScheduler
+from services.scheduler_core.utils import role_to_faculty
 
 Session = sessionmaker(bind=engine)
 session = Session()
 
 session_bp = Blueprint('session_bp', __name__)
-
-role_to_faculty = {
-    "admin-sdt": "Школа цифровых технологий",
-    "admin-sem": "Школа экономики и менеджмента",
-    "admin-gum": "Гуманитарная школа",
-    "admin-spigu": "Школа права и государственного управления"
-}
 
 @session_bp.route('/api/init', methods=['POST'])
 @admin_required("admin")
@@ -397,3 +391,40 @@ def get_all_drafts():
         return jsonify({"error": str(e)}), 500
     finally:
         session.close()
+
+@session_bp.route('/api/drafts/<int:draft_id>', methods=['GET'])
+@admin_required("admin")
+def get_draft_details_by_id(draft_id):
+    db_session = Session(bind=engine)
+    try:
+        draft = db_session.query(ExamSessionDraft).get(draft_id)
+        if draft:
+            return jsonify(draft.to_dict()), 200
+        else:
+            return jsonify({"error": "Черновик не найден"}), 404
+    except Exception as e:
+        logging.error(f"Ошибка при получении черновика {draft_id}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+
+@session_bp.route('/api/drafts/<int:draft_id>', methods=['DELETE'])
+@admin_required("admin")
+def delete_draft_by_id_api(draft_id):
+    db_session = Session(bind=engine)
+    try:
+        draft = db_session.query(ExamSessionDraft).get(draft_id)
+        if not draft:
+            return jsonify({"error": "Черновик не найден"}), 404
+
+        # Удаляем связанные статусы администраторов
+        db_session.query(AdminStatusDraft).filter_by(session_id=draft_id).delete()
+        db_session.delete(draft)
+        db_session.commit()
+        return jsonify({"message": "Черновик успешно удалён"}), 200
+    except Exception as e:
+        db_session.rollback()
+        logging.error(f"Ошибка при удалении черновика {draft_id}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()

@@ -93,3 +93,32 @@ def normalize_room(room_str):
     if ',' in room_str:
         return ','.join(sorted([r.strip() for r in room_str.split(',')]))
     return room_str
+
+
+def handle_nan_values(obj):
+    import math
+    import numpy as np
+    import pandas as pd
+    if isinstance(obj, (float, np.float64, np.float32)) and (math.isnan(obj) or np.isnan(obj)):
+        return None
+    if isinstance(obj, (np.int64, np.int32)):
+        return int(obj)
+    if isinstance(obj, (np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {key: handle_nan_values(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [handle_nan_values(item) for item in obj]
+    elif isinstance(obj, pd.DataFrame):
+        return obj.replace({np.nan: None}).to_dict('records')
+    else:
+        return obj
+
+
+allowed_roles = {"admin-sdt", "admin-gum", "admin-spigu", "admin-sem", "admin"}
+role_to_faculty = {
+    "admin-sdt": "Школа цифровых технологий",
+    "admin-sem": "Школа экономики и менеджмента",
+    "admin-gum": "Гуманитарная школа",
+    "admin-spigu": "Школа права и государственного управления"
+}

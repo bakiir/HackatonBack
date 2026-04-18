@@ -19,12 +19,7 @@ session = Session()
 
 proctor_bp = Blueprint('proctor_bp', __name__)
 
-role_to_faculty = {
-    "admin-sdt": "Школа цифровых технологий",
-    "admin-sem": "Школа экономики и менеджмента",
-    "admin-gum": "Гуманитарная школа",
-    "admin-spigu": "Школа права и государственного управления"
-}
+from services.scheduler_core.utils import role_to_faculty
 
 @proctor_bp.route('/api/proctors/assign', methods=['POST'])
 @admin_required("admin")

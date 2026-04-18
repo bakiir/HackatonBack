@@ -20,14 +20,8 @@ session = Session()
 
 schedule_bp = Blueprint('schedule_bp', __name__)
 
-role_to_faculty = {
-    "admin-sdt": "Школа цифровых технологий",
-    "admin-sem": "Школа экономики и менеджмента",
-    "admin-gum": "Гуманитарная школа",
-    "admin-spigu": "Школа права и государственного управления"
-}
-
-from app import handle_nan_values, group_consecutive_slots
+from services.scheduler_core.utils import handle_nan_values, group_consecutive_slots, role_to_faculty
+from datetime import datetime
 
 
 @schedule_bp.route('/schedule')
@@ -222,6 +216,113 @@ def resolve_conflicts_by_group_api():
         return jsonify({"error": str(e)}), 500
     finally:
         db_session.close()
+
+
+@schedule_bp.route('/schedule/student/<string:student_id>')
+def get_student_schedule(student_id):
+    try:
+        if not store.current_scheduler:
+            return jsonify({"error": "Планировщик не инициализирован"}), 500
+
+        # Диагностика: логируем первые 5 ключей из seat_assignments
+        if hasattr(store.current_scheduler, 'seat_assignments'):
+            sample_keys = list(store.current_scheduler.seat_assignments.keys())[:5]
+            logging.info(f"Sample seat assignment keys: {sample_keys}")
+        else:
+            logging.error("No seat_assignments in scheduler!")
+
+        student_schedule = store.current_scheduler.get_student_sections(student_id)
+
+        if student_schedule.empty:
+            return jsonify({"error": "Расписание не найдено"}), 404
+
+        result = student_schedule.drop(
+            columns=['Student_Conflicts', 'proctor_needed'],  # Убрали 'Proctor'
+            errors='ignore'
+        ).replace({np.nan: None}).to_dict('records')
+
+        for exam in result:
+            try:
+                # Формируем ключ для поиска
+                date_part = exam['Date']
+                time_slot = exam['Time_Slot'].strip()
+                subject = exam['Subject'].strip()
+                proctor = exam.get('Proctor', None)  # Берем проктора из schedule_df
+
+                # Вариант 1: точное совпадение
+                exact_key = f"{date_part}|{time_slot}|{subject}|{student_id}"
+
+                # Вариант 2: без учёта пробелов
+                clean_key = f"{date_part}|{time_slot}|{subject.replace(' ', '')}|{student_id}"
+
+                # Вариант 3: с нормализацией Unicode
+                normalized_key = f"{date_part}|{time_slot}|{subject.encode('unicode-escape').decode()}|{student_id}"
+
+                logging.info(f"Searching seat for key: {exact_key}")
+
+                # Пробуем разные варианты ключей
+                seat_info = (store.current_scheduler.seat_assignments.get(exact_key) or
+                             store.current_scheduler.seat_assignments.get(clean_key) or
+                             next((v for k, v in store.current_scheduler.seat_assignments.items()
+                                   if student_id in k and subject in k and time_slot in k), None))
+
+                if seat_info:
+                    exam['seat_info'] = {
+                        'seat_number': seat_info.get('seat'),
+                        'room': seat_info.get('room'),
+                        'proctor': proctor  # Добавляем проктора
+                    }
+                    logging.info(f"Found seat info: {exam['seat_info']}")
+                else:
+                    exam['seat_info'] = {
+                        'seat_number': None,
+                        'room': None,
+                        'proctor': proctor
+                    }
+                    logging.warning(f"No seat found for student {student_id} in {subject} on {date_part} {time_slot}")
+
+            except Exception as e:
+                logging.error(f"Error processing seat info: {str(e)}")
+                exam['seat_info'] = {
+                    'seat_number': None,
+                    'room': 'Ошибка',
+                    'proctor': 'Ошибка обработки'
+                }
+        
+        grouped_result = group_consecutive_slots(result)
+        return jsonify(grouped_result)
+
+    except Exception as e:
+        logging.error(f"Ошибка при получении расписания: {traceback.format_exc()}")
+        return jsonify({
+            "error": "Внутренняя ошибка сервера",
+            "details": str(e)
+        }), 500
+
+
+@schedule_bp.route('/api/debug/all_sections', methods=['GET'])
+def get_all_sections_debug():
+    """
+    Диагностический эндпоинт для получения списка всех секций,
+    известных планировщику в данный момент.
+    """
+    
+    if not store.current_scheduler:
+        return jsonify({'error': 'Планировщик не инициализирован'}), 400
+    
+    try:
+        # Убедимся, что exam_groups на месте
+        if not hasattr(store.current_scheduler, 'exam_groups') or store.current_scheduler.exam_groups.empty:
+             store.current_scheduler._prepare_data() # Попытка переподготовить данные, если они пусты
+
+        all_sections = store.current_scheduler.get_all_section_names()
+        return jsonify({
+            'total_sections': len(all_sections),
+            'sections': all_sections
+        })
+    except Exception as e:
+        logging.error(f"Ошибка в /api/debug/all_sections: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @schedule_bp.route('/api/resolved_conflicts', methods=['GET'])
 @admin_required("admin")

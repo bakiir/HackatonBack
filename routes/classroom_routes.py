@@ -13,18 +13,12 @@ from services.jwt_service import admin_required
 from flask_jwt_extended import jwt_required, get_jwt
 
 import services.scheduler_store as store
+from services.scheduler_core.utils import role_to_faculty
 
 Session = sessionmaker(bind=engine)
 session = Session()
 
 classroom_bp = Blueprint('classroom_bp', __name__)
-
-role_to_faculty = {
-    "admin-sdt": "Школа цифровых технологий",
-    "admin-sem": "Школа экономики и менеджмента",
-    "admin-gum": "Гуманитарная школа",
-    "admin-spigu": "Школа права и государственного управления"
-}
 
 @classroom_bp.route('/api/classroom/free-slots-old', methods=['GET'])
 def get_free_classroom_slots_old():

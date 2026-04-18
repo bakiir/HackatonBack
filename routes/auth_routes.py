@@ -1,7 +1,7 @@
 from celery.worker.state import requests
 from flask import Blueprint, jsonify, request, send_file
 
-from app import allowed_roles
+from services.scheduler_core.utils import allowed_roles, role_to_faculty
 from create_db import  engine
 from sqlalchemy.orm import sessionmaker
 import threading
