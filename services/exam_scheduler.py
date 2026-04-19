@@ -1,4 +1,4 @@
-﻿import json
+import json
 import math
 import random
 import re
@@ -15,7 +15,7 @@ from io import StringIO
 from .scheduler_core.seating_manager import SeatingManager
 from .scheduler_core.proctor_manager import ProctorManager
 from .scheduler_core.optimizer import SimulatedAnnealingOptimizer
-from .scheduler_core.utils import group_consecutive_slots, normalize_room
+from .scheduler_core.utils import group_consecutive_slots, normalize_room, get_exam_type, check_overlap
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -469,20 +469,6 @@ class ExamScheduler:
     # Метод перенесен в отдельную логику классификации (в будущем)
     # Оставляем здесь для совместимости, но помечаем как deprecated
     @staticmethod
-    def get_exam_type(exam_info):
-        """Определяет тип экзамена на основе его атрибутов."""
-        # TODO: Переместить в services/exam_classifier.py
-        has_exam = exam_info.get('has_exam', False)
-        proctor_needed = exam_info.get('proctor_needed', False)
-        two_rooms_needed = exam_info.get('two_rooms_needed', False)
-
-        if has_exam and proctor_needed and two_rooms_needed:
-            return "written"
-        elif not has_exam and not proctor_needed and not two_rooms_needed:
-            return "summative"
-        elif has_exam and not proctor_needed and not two_rooms_needed:
-            return "defense"
-        return "unknown"
 
     def manage_subjects_before_scheduling(self):
 
@@ -572,19 +558,23 @@ class ExamScheduler:
         return student_sections
 
     def create_schedule(self):
-        from .scheduler_core.planner import Planner
-        logging.info("Делегирование планирования в Planner...")
-        planner = Planner(self)
+        from .scheduler_core.planner_orchestrator import PlannerOrchestrator
+        logging.info("Делегирование планирования в PlannerOrchestrator...")
+        
+        # Ensure num_blocks_in_day is set before orchestrator init
+        total_dur = (self.work_day_end - self.work_day_start).total_seconds() / 60
+        self.num_blocks_in_day = int(total_dur / self.time_step)
+
+        orchestrator = PlannerOrchestrator(self)
         try:
-            planner.create_schedule()
+            orchestrator.run()
         except Exception as e:
             import traceback
-            logging.error(f"Ошибка при создании расписания в Planner: {str(e)}")
+            logging.error(f"Ошибка при создании расписания в PlannerOrchestrator: {str(e)}")
             logging.error(traceback.format_exc())
             self.schedule_df = pd.DataFrame()
             return self.schedule_df
 
-        self.schedule_df = pd.DataFrame(self.schedule) if hasattr(self, 'schedule') and self.schedule else pd.DataFrame()
         if not self.schedule_df.empty:
             self.assign_seats()
 
@@ -597,7 +587,7 @@ class ExamScheduler:
         return self.optimizer.calculate_total_conflicts(student_exams_dict)
 
     def check_overlap(self, slot1, slot2):
-        return self.optimizer.check_overlap(slot1, slot2)
+        return check_overlap(slot1, slot2)
 
 
     def _log_schedule_stats(self):
@@ -1051,6 +1041,27 @@ class ExamScheduler:
 
         section_students = self.exams_df[self.exams_df['Section'] == section_id]
         return section_students['fake_id'].tolist()
+
+    def _remove_exam_from_state(self, exam_record):
+        """Полностью удаляет запись об экзамене из текущего состояния планировщика."""
+        # 1. Удаляем из общего списка
+        if exam_record in self.schedule:
+            self.schedule.remove(exam_record)
+        
+        # 2. Удаляем из расписаний студентов
+        section_id = exam_record.get('Section')
+        day_str = exam_record.get('Date')
+        
+        students = self.section_students_map.get(section_id, [])
+        for s_id in students:
+            s_id_str = str(s_id)
+            if s_id_str in self.student_exams:
+                if exam_record in self.student_exams[s_id_str]:
+                    self.student_exams[s_id_str].remove(exam_record)
+
+        # 3. Уменьшаем счетчик экзаменов в день
+        if day_str in self.exams_per_day_count:
+            self.exams_per_day_count[day_str] = max(0, self.exams_per_day_count[day_str] - 1)
 
     def analyze_failed_sections_details(self):
         logging.info("Начало анализа незапланированных секций.")

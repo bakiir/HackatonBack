@@ -1,21 +1,25 @@
 from flask import Blueprint, jsonify, request
-from create_db import ExamSession, engine, ExamSessionDraft, AdminStatusDraft, RoomExclusion, ClassroomSlot, update_classroom_slots
+from create_db import engine, ExamSessionDraft, AdminStatusDraft, RoomExclusion, update_classroom_slots
 from sqlalchemy.orm import sessionmaker
 import logging
 import traceback
 from datetime import datetime
-import tempfile
-import os
 
-from users_db import  get_or_create_admin_status, set_admin_status_ready, get_all_admin_statuses, are_all_admins_ready
+from users_db import get_all_admin_statuses, are_all_admins_ready
 from services.jwt_service import admin_required
 from flask_jwt_extended import jwt_required, get_jwt
 
 from services.exam_scheduler import ExamScheduler
-from services.scheduler_core.utils import role_to_faculty
+from repositories.session_repository import SessionRepository, SessionDraftRepository
+from services.data_access.session_service import SessionService
 
 Session = sessionmaker(bind=engine)
-session = Session()
+db_session = Session()
+
+# Initialize Repository and Service
+session_repo = SessionRepository(db_session)
+draft_repo = SessionDraftRepository(db_session)
+session_service = SessionService(session_repo, draft_repo)
 
 session_bp = Blueprint('session_bp', __name__)
 
@@ -25,17 +29,6 @@ def handle_initialization():
     import services.scheduler_store as store
 
     try:
-        # Clear old room exclusions at the start of initialization
-        try:
-            num_deleted = session.query(RoomExclusion).delete()
-            session.commit()
-            logging.info(f"Удалено {num_deleted} старых правил блокировки аудиторий.")
-        except Exception as e:
-            session.rollback()
-            logging.error(f"Ошибка при удалении старых блокировок: {str(e)}")
-            return jsonify({'status': 'error', 'message': f'Ошибка при очистке старых блокировок: {str(e)}'}), 500
-
-        # 1. Загрузка файлов
         title = request.form.get('title', 'Сезон без имени')
         exams_file = request.files['exams']
         rooms_file = request.files['rooms']
@@ -43,43 +36,14 @@ def handle_initialization():
         start_date = request.form['start_date']
         num_days = int(request.form.get('num_days', 14))
 
-        # 2. Сохранение файлов
-        with tempfile.TemporaryDirectory() as temp_dir:
-            exams_path = os.path.join(temp_dir, 'exams.xlsx')
-            rooms_path = os.path.join(temp_dir, 'rooms.xlsx')
-            faculties_path = os.path.join(temp_dir, 'faculties.xlsx')
+        # Delegate initialization to service
+        scheduler, new_draft = session_service.initialize_scheduler_session(
+            title, exams_file, rooms_file, faculties_file, start_date, num_days
+        )
+        
+        # Update global store
+        store.current_scheduler = scheduler
 
-            exams_file.save(exams_path)
-            rooms_file.save(rooms_path)
-            faculties_file.save(faculties_path)
-
-            # 3. Инициализация планировщика
-            store.current_scheduler = ExamScheduler(
-                title=title,
-                exams_file=exams_path,
-                rooms_file=rooms_path,
-                faculties_file=faculties_path,
-                start_date=start_date,
-                num_days=num_days
-            )
-            # 4. Update classroom slots
-            update_classroom_slots(store.current_scheduler.get_current_dates(), store.current_scheduler.rooms_df)
-
-            # 5. Создание черновика сессии
-            session.query(ExamSessionDraft).update({'is_active': False})  # Деактивируем предыдущие черновики
-            new_draft = ExamSessionDraft(
-                title=title,
-                start_date=datetime.strptime(start_date, '%Y-%m-%d').date(),
-                days=num_days,
-                exams_data=store.current_scheduler.exams_df.to_json(orient='records'),
-                rooms_data=store.current_scheduler.rooms_df.to_json(orient='records'),
-                faculties_data=store.current_scheduler.faculties_df.to_json(orient='records'),
-                is_active=True
-            )
-            session.add(new_draft)
-            session.commit()
-
-        # 5. Возвращаем данные для управления предметами
         return jsonify({
             'status': 'subject_management',
             'subjects': store.current_scheduler.get_unique_subjects(),
@@ -174,61 +138,47 @@ def set_admin_status_draft():
     if user_role not in ["admin-sdt", "admin-sem", "admin-gum", "admin-spigu"]:
         return jsonify({"error": "Доступ запрещён"}), 403
 
-    session = Session()
     try:
-        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        active_draft = draft_repo.session.query(ExamSessionDraft).filter_by(is_active=True).first()
         if not active_draft:
             return jsonify({"error": "Активный черновик сессии не найден"}), 404
 
-        # Используем новую модель AdminStatusDraft
-        get_or_create_admin_status(session, active_draft.id, user_role, model=AdminStatusDraft)
-        set_admin_status_ready(session, active_draft.id, user_role, model=AdminStatusDraft)
+        draft_repo.update_admin_status(active_draft.id, user_role, 'ready')
         logging.info(f"Администратор {user_role} установил статус 'ready' для черновика сессии {active_draft.id}")
         return jsonify({"message": f"Статус для {user_role} установлен на 'ready'"}), 200
     except Exception as e:
         logging.error(f"Ошибка при установке статуса: {str(e)}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        session.close()
 
 @session_bp.route('/api/check_all_drafts', methods=['GET'])
 @admin_required("admin")
 def check_all_drafts():
-    session = Session()
     try:
-        active_draft = session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        active_draft = draft_repo.session.query(ExamSessionDraft).filter_by(is_active=True).first()
         if not active_draft:
             return jsonify({"have_drafts": False}), 200
 
-        all_ready = are_all_admins_ready(session, active_draft.id, model=AdminStatusDraft)
+        all_ready = are_all_admins_ready(draft_repo.session, active_draft.id, model=AdminStatusDraft)
         return jsonify({"have_drafts": all_ready}), 200
     except Exception as e:
         logging.error(f"Ошибка при проверке статусов: {str(e)}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        session.close()
 
 @session_bp.route('/api/admin_statuses', methods=['GET'])
 @jwt_required()
 def admin_statuses():
-    session = Session()
     try:
-        # Проверяем наличие активной сессии
-        active_session = session.query(ExamSessionDraft).filter_by(is_active=True).first()
-
-        # Проверяем наличие любых черновиков
-        draft_count = session.query(ExamSessionDraft).count()
+        active_session = draft_repo.session.query(ExamSessionDraft).filter_by(is_active=True).first()
+        draft_count = draft_repo.session.query(ExamSessionDraft).count()
         has_drafts = draft_count > 0
 
-        # Если активная сессия есть, получаем статусы
         if active_session:
-            statuses = get_all_admin_statuses(session, active_session.id)
+            statuses = get_all_admin_statuses(draft_repo.session, active_session.id)
             return jsonify({
                 "statuses": [s.to_dict() for s in statuses],
                 "has_drafts": has_drafts
             }), 200
         else:
-            # Если активной сессии нет, возвращаем только has_drafts
             return jsonify({
                 "has_drafts": has_drafts
             }), 200
@@ -236,144 +186,105 @@ def admin_statuses():
     except Exception as e:
         logging.error(f"Ошибка при получении статусов: {str(e)}")
         return jsonify({"error": str(e), "has_drafts": False}), 500
-    finally:
-        session.close()
 
 @session_bp.route('/api/sessions', methods=['GET'])
 @admin_required("admin")
 def get_all_sessions():
-    db_session = Session()
     try:
-        sessions = db_session.query(ExamSession).all()
-
+        sessions = session_repo.get_all()
         sessions_data = [
             {
-                'title': exam_session.title,
-                'start_date': exam_session.start_date,
-                'days': exam_session.days,
-                'created_at': exam_session.created_at,
-                'id': exam_session.id
-
+                'title': s.title,
+                'start_date': s.start_date,
+                'days': s.days,
+                'created_at': s.created_at,
+                'id': s.id
             }
-            for exam_session in sessions
+            for s in sessions
         ]
-
         return jsonify(sessions_data), 200
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-    finally:
-        db_session.close()
 
 @session_bp.route('/api/sessions/<int:session_id>/data', methods=['GET'])
 @admin_required("admin")
 def get_data_by_id(session_id):
-    db_session = Session()
     try:
-        data = db_session.query(ExamSession).get(session_id)
-        data = data.to_dict()
-        if(data):
-            return jsonify(data), 200
-        else:
-            return jsonify({"error": "Session not found"}), 404
-
+        data = session_repo.get_by_id(session_id)
+        if data:
+            return jsonify(data.to_dict()), 200
+        return jsonify({"error": "Session not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-    finally:
-        db_session.close()
 
 @session_bp.route('/api/sessions/<int:session_id>', methods=['GET'])
 @admin_required("admin")
 def get_session_details(session_id):
-    db_session = Session()
     try:
-        session = db_session.query(ExamSession).get(session_id)
+        session = session_repo.get_by_id(session_id)
         if session:
             return jsonify(session.to_dict()), 200
-        else:
-            return jsonify({"error": "Session not found"}), 404
+        return jsonify({"error": "Session not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    finally:
-        db_session.close()
 
 @session_bp.route('/api/sessions/<int:session_id>/activate', methods=['POST'])
 @admin_required("admin")
 def activate_session(session_id):
-    db_session = Session()
     try:
-        session = db_session.query(ExamSession).get(session_id)
-        if not session:
+        session_obj = session_repo.get_by_id(session_id)
+        if not session_obj:
             return jsonify({"error": "Session not found"}), 404
 
         import services.scheduler_store as store
+        store.current_scheduler = ExamScheduler(session_data=session_obj)
 
-        # Загружаем данные сессии
-        store.current_scheduler = ExamScheduler(session_data=session)
-
-        # Дополнительная проверка seat_assignments
         if not hasattr(store.current_scheduler, 'seat_assignments') or not store.current_scheduler.seat_assignments:
-            if session.seat_assignments:
-                store.current_scheduler.seat_assignments = session.seat_assignments
+            if session_obj.seat_assignments:
+                store.current_scheduler.seat_assignments = session_obj.seat_assignments
                 logging.info("Loaded seat_assignments directly from session")
-            else:
-                logging.warning("No seat_assignments in session data")
 
-        db_session.query(ExamSession).update({"is_active": False})
-        session.is_active = True
-        db_session.commit()
+        session_repo.set_active_session(session_id)
 
         return jsonify({
             "status": "success",
             "seat_assignments_loaded": bool(hasattr(store.current_scheduler, 'seat_assignments') and
                                             store.current_scheduler.seat_assignments)
         })
-
     except Exception as e:
-        db_session.rollback()
         return jsonify({"error": str(e)}), 500
-    finally:
-        db_session.close()
 
 @session_bp.route('/api/sessions/<int:session_id>', methods=['DELETE'])
 @admin_required("admin")
 def delete_session(session_id):
-    db = Session()
     try:
-        session_obj = db.query(ExamSession).get(session_id)
-        db.delete(session_obj)
-        db.commit()
-        return jsonify({"message": "Сессия удалена"}), 200
+        session_obj = session_repo.get_by_id(session_id)
+        if session_obj:
+            session_repo.delete(session_obj)
+            return jsonify({"message": "Сессия удалена"}), 200
+        return jsonify({"error": "Session not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @session_bp.route('/api/delete_draft/<int:draft_id>', methods=['DELETE'])
 @admin_required("admin")
 def delete_draft(draft_id):
-    session = Session()
     try:
-        draft = session.query(ExamSessionDraft).get(draft_id)
+        draft = draft_repo.get_by_id(draft_id)
         if not draft:
             return jsonify({"error": "Черновик не найден"}), 404
 
-        session.query(AdminStatusDraft).filter_by(session_id=draft_id).delete()
-        session.delete(draft)
-        session.commit()
+        draft_repo.session.query(AdminStatusDraft).filter_by(session_id=draft_id).delete()
+        draft_repo.delete(draft)
         return jsonify({"message": "Черновик успешно удалён"}), 200
     except Exception as e:
-        session.rollback()
         return jsonify({"error": str(e)}), 500
-    finally:
-        session.close()
 
 @session_bp.route('/api/drafts', methods=['GET'])
 @admin_required("admin")
 def get_all_drafts():
-    session = Session(bind=engine)
     try:
-        drafts = session.query(ExamSessionDraft).all()
+        drafts = draft_repo.get_all()
         drafts_data = [
             {
                 'id': draft.id,
@@ -389,42 +300,30 @@ def get_all_drafts():
     except Exception as e:
         logging.error(f"Ошибка при получении списка черновиков: {str(e)}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        session.close()
 
 @session_bp.route('/api/drafts/<int:draft_id>', methods=['GET'])
 @admin_required("admin")
 def get_draft_details_by_id(draft_id):
-    db_session = Session(bind=engine)
     try:
-        draft = db_session.query(ExamSessionDraft).get(draft_id)
+        draft = draft_repo.get_by_id(draft_id)
         if draft:
             return jsonify(draft.to_dict()), 200
-        else:
-            return jsonify({"error": "Черновик не найден"}), 404
+        return jsonify({"error": "Черновик не найден"}), 404
     except Exception as e:
         logging.error(f"Ошибка при получении черновика {draft_id}: {str(e)}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        db_session.close()
 
 @session_bp.route('/api/drafts/<int:draft_id>', methods=['DELETE'])
 @admin_required("admin")
 def delete_draft_by_id_api(draft_id):
-    db_session = Session(bind=engine)
     try:
-        draft = db_session.query(ExamSessionDraft).get(draft_id)
+        draft = draft_repo.get_by_id(draft_id)
         if not draft:
             return jsonify({"error": "Черновик не найден"}), 404
 
-        # Удаляем связанные статусы администраторов
-        db_session.query(AdminStatusDraft).filter_by(session_id=draft_id).delete()
-        db_session.delete(draft)
-        db_session.commit()
+        draft_repo.session.query(AdminStatusDraft).filter_by(session_id=draft_id).delete()
+        draft_repo.delete(draft)
         return jsonify({"message": "Черновик успешно удалён"}), 200
     except Exception as e:
-        db_session.rollback()
         logging.error(f"Ошибка при удалении черновика {draft_id}: {str(e)}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        db_session.close()

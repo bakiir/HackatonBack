@@ -122,3 +122,29 @@ role_to_faculty = {
     "admin-gum": "Гуманитарная школа",
     "admin-spigu": "Школа права и государственного управления"
 }
+
+def get_exam_type(exam_info):
+    """Определяет тип экзамена на основе его атрибутов."""
+    has_exam = exam_info.get('has_exam', False)
+    proctor_needed = exam_info.get('proctor_needed', False)
+    two_rooms_needed = exam_info.get('two_rooms_needed', False)
+
+    if has_exam and proctor_needed and two_rooms_needed:
+        return "written"
+    elif not has_exam and not proctor_needed and not two_rooms_needed:
+        return "summative"
+    elif has_exam and not proctor_needed and not two_rooms_needed:
+        return "defense"
+    return "unknown"
+
+def check_overlap(slot1, slot2):
+    """Проверяет пересечение двух временных слотов."""
+    if not all([slot1, slot2]) or slot1 == 'N/A' or slot2 == 'N/A':
+        return False
+    try:
+        from datetime import datetime
+        start1, end1 = [datetime.strptime(t, '%H:%M') for t in slot1.split('-')]
+        start2, end2 = [datetime.strptime(t, '%H:%M') for t in slot2.split('-')]
+        return max(start1, start2) < min(end1, end2)
+    except Exception:
+        return False

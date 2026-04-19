@@ -4,6 +4,7 @@ import math
 from collections import defaultdict
 from datetime import datetime, timedelta
 import pandas as pd
+from .utils import check_overlap
 
 class SimulatedAnnealingOptimizer:
     """
@@ -120,7 +121,7 @@ class SimulatedAnnealingOptimizer:
                         for j in range(i + 1, len(daily_exams)):
                             exam1 = daily_exams[i]
                             exam2 = daily_exams[j]
-                            if self.check_overlap(exam1.get('Time_Slot'), exam2.get('Time_Slot')):
+                            if check_overlap(exam1.get('Time_Slot'), exam2.get('Time_Slot')):
                                 total_conflicts += 1
                     
                     # Дополнительно штрафуем просто за наличие 2+ экзаменов в день (soft conflict)
@@ -129,16 +130,6 @@ class SimulatedAnnealingOptimizer:
                     
         return total_conflicts
 
-    def check_overlap(self, slot1, slot2):
-        """Проверяет пересечение двух временных слотов."""
-        if not all([slot1, slot2]) or slot1 == 'N/A' or slot2 == 'N/A':
-            return False
-        try:
-            start1, end1 = [datetime.strptime(t, '%H:%M') for t in slot1.split('-')]
-            start2, end2 = [datetime.strptime(t, '%H:%M') for t in slot2.split('-')]
-            return max(start1, start2) < min(end1, end2)
-        except Exception:
-            return False
 
     def _calculate_move_delta_cost(self, exam_to_move, new_day_str, student_exams):
         """Вычисляет изменение 'стоимости' (количества конфликтов) при переносе экзамена."""
@@ -200,7 +191,7 @@ class SimulatedAnnealingOptimizer:
             exam_time_slot_str = f"{exam_start_dt.strftime('%H:%M')}-{exam_end_dt.strftime('%H:%M')}"
 
             # Проверка доступности преподавателя
-            if not self.scheduler._is_instructor_available(instructor, day_obj, exam_time_slot_str, exam_rec):
+            if not self.scheduler.constraint_engine.is_instructor_available(instructor, day_str, exam_time_slot_str, exam_rec):
                 continue
 
             # Проверка доступности хотя бы одной комнаты (или двух если нужно)
@@ -213,11 +204,11 @@ class SimulatedAnnealingOptimizer:
             # Проверка исключений аудиторий
             available_rooms = [
                 r for r in grid_available_rooms
-                if not self.scheduler._is_room_excluded(r, day_obj, exam_start_dt, exam_end_dt)
+                if not self.scheduler.constraint_engine.is_room_excluded(r, day_obj.date(), exam_start_dt, exam_end_dt)
             ]
 
             classroom_type = exam_rec.get('classroom_type', 'regular')
-            final_room_str, rooms_to_book = self.scheduler._find_suitable_rooms(available_rooms, num_students, exam_rec, classroom_type)
+            final_room_str, rooms_to_book = self.scheduler.constraint_engine.find_suitable_rooms(available_rooms, num_students, exam_rec)
 
             if final_room_str:
                 return {
