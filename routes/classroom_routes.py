@@ -36,6 +36,7 @@ def get_free_classroom_slots_old():
     finally:
         session.close()
 
+@classroom_bp.route('/api/classroom/free-slots', methods=['GET'])
 @classroom_bp.route('/api/free-slots', methods=['GET'])
 def get_free_slots():
     session = Session()
@@ -45,20 +46,32 @@ def get_free_slots():
         duration_minutes = request.args.get('duration', type=int)
         classroom_number = request.args.get('classroom_number')
 
-        if not all([date_str, duration_minutes, classroom_number]):
-            return jsonify({'error': 'Missing required parameters: date, duration, classroom_number'}), 400
+        if not classroom_number:
+            return jsonify({'error': 'Missing required parameter: classroom_number'}), 400
+
+        # --- Режим 1: только classroom_number — возвращаем все свободные слоты из БД ---
+        if not date_str and not duration_minutes:
+            free_slots = session.query(ClassroomSlot).filter(
+                ClassroomSlot.classroom_number == classroom_number,
+                ClassroomSlot.is_booked == False
+            ).order_by(ClassroomSlot.start_time).all()
+            return jsonify([slot.to_dict() for slot in free_slots]), 200
+
+        # --- Режим 2: classroom_number + date + duration — вычисляем доступные окна ---
+        if not date_str or not duration_minutes:
+            return jsonify({'error': 'Missing required parameters: date and duration must be provided together'}), 400
 
         target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
 
         # 2. Определение временных рамок
-        work_start_hour=8
-        work_end_hour=19
-        work_end_minute=30
-        time_step=30
-        
+        work_start_hour = 8
+        work_end_hour = 19
+        work_end_minute = 30
+        time_step = 30
+
         day_start = datetime.combine(target_date, datetime.min.time()).replace(hour=work_start_hour)
         day_end = datetime.combine(target_date, datetime.min.time()).replace(hour=work_end_hour, minute=work_end_minute)
-        
+
         total_duration_minutes = (day_end - day_start).total_seconds() / 60
         num_blocks_in_day = int(total_duration_minutes / time_step)
 
