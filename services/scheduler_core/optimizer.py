@@ -73,7 +73,7 @@ class SimulatedAnnealingOptimizer:
             new_slot_info = self._find_free_slot_for_exam(new_day.strftime('%Y-%m-%d'), exam_to_move)
 
             if new_slot_info and new_slot_info['Date'] != exam_to_move['Date']:
-                delta_cost = self._calculate_move_delta_cost(exam_to_move, new_slot_info['Date'], student_exams)
+                delta_cost = self._calculate_move_delta_cost(exam_to_move, new_slot_info, student_exams)
 
                 # Критерий принятия по алгоритму Метрополиса
                 if delta_cost < 0 or (temperature > 0 and random.random() < math.exp(-delta_cost / temperature)):
@@ -122,7 +122,7 @@ class SimulatedAnnealingOptimizer:
                             exam1 = daily_exams[i]
                             exam2 = daily_exams[j]
                             if check_overlap(exam1.get('Time_Slot'), exam2.get('Time_Slot')):
-                                total_conflicts += 1
+                                total_conflicts += 1000
                     
                     # Дополнительно штрафуем просто за наличие 2+ экзаменов в день (soft conflict)
                     # Это можно настроить, сейчас штраф = 1 за каждую доп. секцию сверх первой
@@ -131,28 +131,52 @@ class SimulatedAnnealingOptimizer:
         return total_conflicts
 
 
-    def _calculate_move_delta_cost(self, exam_to_move, new_day_str, student_exams):
+    def _calculate_move_delta_cost(self, exam_to_move, new_slot_info, student_exams):
         """Вычисляет изменение 'стоимости' (количества конфликтов) при переносе экзамена."""
         section_id = exam_to_move['Section']
         students = self.scheduler.section_students_map.get(section_id, [])
         old_day_str = exam_to_move['Date']
+        new_day_str = new_slot_info['Date']
+        new_time_slot_str = new_slot_info['Time_Slot']
         
         delta_cost = 0
         
         for sid in students:
-            # Стоимость в старом дне
-            exams_in_old_day = [e for e in student_exams[sid] if e['Date'] == old_day_str]
-            # После удаления этого экзамена конфликтов станет меньше
-            # (предполагаем упрощенную модель стоимости где каждый доп. экзамен в день дает +1 к стоимости)
-            cost_before = max(0, len(exams_in_old_day) - 1)
-            cost_after = max(0, len(exams_in_old_day) - 2)
-            delta_cost += (cost_after - cost_before)
+            exams_all = student_exams.get(sid, [])
+            
+            # --- OLD DAY COST ---
+            exams_in_old_day = [e for e in exams_all if e['Date'] == old_day_str]
+            old_cost_before = max(0, len(exams_in_old_day) - 1)
+            for i in range(len(exams_in_old_day)):
+                for j in range(i+1, len(exams_in_old_day)):
+                    if check_overlap(exams_in_old_day[i].get('Time_Slot'), exams_in_old_day[j].get('Time_Slot')):
+                       old_cost_before += 1000
+                       
+            exams_in_old_after = [e for e in exams_in_old_day if e['Section'] != section_id]
+            old_cost_after = max(0, len(exams_in_old_after) - 1)
+            for i in range(len(exams_in_old_after)):
+                for j in range(i+1, len(exams_in_old_after)):
+                    if check_overlap(exams_in_old_after[i].get('Time_Slot'), exams_in_old_after[j].get('Time_Slot')):
+                       old_cost_after += 1000
+                       
+            delta_cost += (old_cost_after - old_cost_before)
 
-            # Стоимость в новом дне
-            exams_in_new_day = [e for e in student_exams[sid] if e['Date'] == new_day_str]
-            cost_before = max(0, len(exams_in_new_day) - 1)
-            cost_after = max(0, len(exams_in_new_day))
-            delta_cost += (cost_after - cost_before)
+            # --- NEW DAY COST ---
+            exams_in_new_day = [e for e in exams_all if e['Date'] == new_day_str and e['Section'] != section_id]
+            new_cost_before = max(0, len(exams_in_new_day) - 1)
+            for i in range(len(exams_in_new_day)):
+                for j in range(i+1, len(exams_in_new_day)):
+                    if check_overlap(exams_in_new_day[i].get('Time_Slot'), exams_in_new_day[j].get('Time_Slot')):
+                       new_cost_before += 1000
+                       
+            exams_in_new_after = exams_in_new_day + [{'Time_Slot': new_time_slot_str}]
+            new_cost_after = max(0, len(exams_in_new_after) - 1)
+            for i in range(len(exams_in_new_after)):
+                for j in range(i+1, len(exams_in_new_after)):
+                    if check_overlap(exams_in_new_after[i].get('Time_Slot'), exams_in_new_after[j].get('Time_Slot')):
+                       new_cost_after += 1000
+                       
+            delta_cost += (new_cost_after - new_cost_before)
             
         return delta_cost
 
@@ -192,6 +216,10 @@ class SimulatedAnnealingOptimizer:
 
             # Проверка доступности преподавателя
             if not self.scheduler.constraint_engine.is_instructor_available(instructor, day_str, exam_time_slot_str, exam_rec):
+                continue
+                
+            # Проверка на жесткие нахлесты у студентов
+            if not all(self.scheduler.constraint_engine.is_student_available(s, day_str, time_slot=exam_time_slot_str, strict=False) for s in students):
                 continue
 
             # Проверка доступности хотя бы одной комнаты (или двух если нужно)

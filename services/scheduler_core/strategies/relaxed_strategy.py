@@ -72,7 +72,7 @@ class RelaxedStrategy:
                             if day_exams:
                                 # Overlap check
                                 if any(check_overlap(e['Time_Slot'], exam_time_slot_str) for e in day_exams):
-                                    conflicts += 10 # High penalty for direct overlap
+                                    conflicts += 1000 # High penalty for direct overlap
                                 else:
                                     conflicts += 1 # Low penalty for 2nd exam in day
                         

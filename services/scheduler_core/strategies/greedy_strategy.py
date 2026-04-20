@@ -29,7 +29,7 @@ class GreedyStrategy(BaseStrategy):
             blocks_needed = math.ceil(duration / self.scheduler.time_step) + math.ceil(self.scheduler.buffer_time / self.scheduler.time_step)
 
             found_slot = False
-            # Search days
+            # Search days (Sequential First Fit, NO load balancing to minimize fragmentation)
             for day_dt in self.scheduler.custom_dates:
                 day_str = day_dt.strftime('%Y-%m-%d')
                 

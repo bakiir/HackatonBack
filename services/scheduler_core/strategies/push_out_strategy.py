@@ -42,8 +42,8 @@ class PushOutStrategy:
         for day in self.scheduler.custom_dates:
             day_str = day.strftime('%Y-%m-%d')
             
-            # Basic student availability check (soft)
-            if not all(self.constraint_engine.is_student_available(s_id, day_str, time_slot=None) for s_id in students):
+            # Basic student availability check (soft) - at least allowed to have an exam this day
+            if not all(self.constraint_engine.is_student_available(s_id, day_str, time_slot=None, strict=False) for s_id in students):
                 continue
 
             for start_block in range(self.scheduler.num_blocks_in_day - total_blocks_needed + 1):
@@ -51,6 +51,10 @@ class PushOutStrategy:
                 exam_start_dt = day_start_dt + timedelta(minutes=start_block * self.scheduler.time_step)
                 exam_end_dt = exam_start_dt + timedelta(minutes=duration_minutes)
                 exam_time_slot_str = f"{exam_start_dt.strftime('%H:%M')}-{exam_end_dt.strftime('%H:%M')}"
+                
+                # Strict overlap check for this specific timeslot
+                if not all(self.constraint_engine.is_student_available(s_id, day_str, time_slot=exam_time_slot_str, strict=False) for s_id in students):
+                    continue
 
                 if not self.constraint_engine.is_instructor_available(instructor, day_str, exam_time_slot_str, group.to_dict()):
                     continue
