@@ -100,8 +100,9 @@ class SimulatedAnnealingOptimizer:
                 logging.warning(f"Оптимизация остановлена из-за отсутствия улучшений в течение {max_no_improvement} итераций.")
                 break
         
+        # По требованию: считаем конфликтом даже ситуации, когда у студента 2 и более экзаменов в день (с нахлестом или без)
         final_conflicting_students = {sid for sid, exams in student_exams.items() if self.calculate_total_conflicts({sid: exams}) > 0}
-        logging.info(f"Оптимизация завершена. Финальная стоимость: {current_cost}. Студентов с конфликтами: {len(final_conflicting_students)}")
+        logging.info(f"Оптимизация завершена. Финальная стоимость: {current_cost}. Студентов с конфликтами (2+ в день или нахлест): {len(final_conflicting_students)}")
         
         return student_exams, list(final_conflicting_students)
 
