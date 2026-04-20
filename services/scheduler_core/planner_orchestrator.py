@@ -143,6 +143,7 @@ class PlannerOrchestrator:
         logging.info(f"Stage 2 (Greedy) finished. {len(failed_after_greedy)} sections failed.")
         
         # 3. Stage 3: Flexible Placement (Allowing 2 per day)
+        failed_after_flex = []  # initialise so Stage 4 can always reference it
         if failed_after_greedy:
             flex_strategy = FlexibleStrategy(self.scheduler, self.constraint_engine, self.grid_manager)
             failed_after_flex = flex_strategy.execute(failed_after_greedy)
