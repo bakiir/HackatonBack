@@ -80,16 +80,24 @@ class PushOutStrategy:
         return False
 
     def _get_blocking_exams(self, room_str, day_str, start_block, total_blocks_needed):
+        from ..utils import time_str_to_mins
         blockers = []
         for exam in self.scheduler.schedule:
             if exam['Date'] == day_str and room_str in str(exam['Room']):
-                e_start_dt, e_end_dt = [datetime.strptime(t, '%H:%M') for t in exam['Time_Slot'].split('-')]
-                e_start_block = int((e_start_dt - datetime.combine(e_start_dt.date(), self.scheduler.work_day_start.time())).total_seconds() / 60 / self.scheduler.time_step)
-                e_dur_blocks = math.ceil(exam['Duration'] / self.scheduler.time_step)
-                e_total_blocks = e_dur_blocks + math.ceil(self.scheduler.buffer_time / self.scheduler.time_step)
-                
-                if max(start_block, e_start_block) < min(start_block + total_blocks_needed, e_start_block + e_total_blocks):
-                    blockers.append(exam)
+                try:
+                    s_str, _ = exam['Time_Slot'].split('-')
+                    e_start_mins = time_str_to_mins(s_str)
+                    
+                    work_day_start_mins = self.scheduler.work_day_start.hour * 60 + self.scheduler.work_day_start.minute
+                    e_start_block = int((e_start_mins - work_day_start_mins) / self.scheduler.time_step)
+                    
+                    e_dur_blocks = math.ceil(exam['Duration'] / self.scheduler.time_step)
+                    e_total_blocks = e_dur_blocks + math.ceil(self.scheduler.buffer_time / self.scheduler.time_step)
+                    
+                    if max(start_block, e_start_block) < min(start_block + total_blocks_needed, e_start_block + e_total_blocks):
+                        blockers.append(exam)
+                except Exception:
+                    continue
         return blockers
 
     def _attempt_eviction(self, group, day_str, start_block, total_blocks_needed, rooms_to_book, blockers, time_slot_str):

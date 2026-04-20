@@ -137,21 +137,20 @@ def get_exam_type(exam_info):
         return "defense"
     return "unknown"
 
+def time_str_to_mins(t_str):
+    h, m = t_str.strip().split(':')
+    return int(h) * 60 + int(m)
+
 def check_overlap(slot1, slot2):
-    """Проверяет пересечение двух временных слотов (Оптимизировано: конвертация в минуты)."""
+    """Проверяет пересечение двух временных слотов (Оптимизировано: Глобальная конвертация в минуты)."""
     if not slot1 or not slot2 or slot1 == 'N/A' or slot2 == 'N/A':
         return False
     try:
         s1_str, e1_str = slot1.split('-')
         s2_str, e2_str = slot2.split('-')
         
-        # Конвертируем HH:MM в минуты от начала суток. Это супер-быстро и спасает от ошибки незначащего нуля (9:00 vs 09:00).
-        def to_mins(t_str):
-            h, m = t_str.strip().split(':')
-            return int(h) * 60 + int(m)
-            
-        start1, end1 = to_mins(s1_str), to_mins(e1_str)
-        start2, end2 = to_mins(s2_str), to_mins(e2_str)
+        start1, end1 = time_str_to_mins(s1_str), time_str_to_mins(e1_str)
+        start2, end2 = time_str_to_mins(s2_str), time_str_to_mins(e2_str)
         
         return max(start1, start2) < min(end1, end2)
     except Exception:
